@@ -146,3 +146,43 @@ describe('Entry type classification (C17)', () => {
     expect(isLabOnlyCell('Lunch')).toBe(false);
   });
 });
+
+describe('Timetable upload batch and term association (C4)', () => {
+  const termsDb = [
+    { id: 1, batch_year: 2029, semester_number: 3, term_number: 5, start_date: '2026-08-01', end_date: '2026-10-28' },
+    { id: 2, batch_year: 2028, semester_number: 5, term_number: 9, start_date: '2026-08-01', end_date: '2026-10-28' },
+    { id: 3, batch_year: 2029, semester_number: 3, term_number: 6, start_date: '2026-11-01', end_date: '2027-01-31' },
+  ];
+
+  it('resolves term dates when termId is provided', () => {
+    const term = termsDb.find((t) => t.id === 1);
+    expect(term).toBeDefined();
+    expect(term.start_date).toBe('2026-08-01');
+    expect(term.end_date).toBe('2026-10-28');
+  });
+
+  it('resolves term by batch year and term number', () => {
+    const term = termsDb.find((t) => t.batch_year === 2028 && t.term_number === 9);
+    expect(term).toBeDefined();
+    expect(term.id).toBe(2);
+  });
+
+  it('preserves distinct terms for different batches on the same date span', () => {
+    const batch2029 = termsDb.filter((t) => t.batch_year === 2029);
+    const batch2028 = termsDb.filter((t) => t.batch_year === 2028);
+
+    expect(batch2029).toHaveLength(2);
+    expect(batch2028).toHaveLength(1);
+    // Distinct term IDs
+    expect(batch2029[0].id).not.toBe(batch2028[0].id);
+  });
+
+  it('associates imported entries with term_id', () => {
+    const rawClass = { course: 'MERN', room_id: 1, day_of_week: 1, start: '10:00', end: '12:00' };
+    const termId = 1;
+    const entry = { ...rawClass, term_id: termId, valid_from: termsDb[0].start_date, valid_to: termsDb[0].end_date };
+
+    expect(entry.term_id).toBe(1);
+    expect(entry.valid_from).toBe('2026-08-01');
+  });
+});

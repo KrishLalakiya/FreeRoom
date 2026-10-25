@@ -72,11 +72,17 @@ export const adminAPI = {
   cancelClass: (data) =>
     api.post('/admin/cancel-class', data),
 
-  getTimetable: (roomId) =>
-    api.get('/admin/timetable', { params: { roomId } }),
+  getTimetable: (roomId, termId) =>
+    api.get('/admin/timetable', { params: { roomId, termId } }),
 
   getEvents: () =>
     api.get('/admin/events'),
+
+  getTerms: () =>
+    api.get('/admin/terms'),
+
+  createTerm: (data) =>
+    api.post('/admin/terms', data),
 
   importTimetable: (formData) =>
     api.post('/admin/timetable/import', formData, {

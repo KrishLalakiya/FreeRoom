@@ -422,6 +422,7 @@ function timetableKey(row) {
 export async function importTimetable({
   buffer,
   buildingId,
+  termId = null,
   validFrom,
   validTo,
   saveValidRowsOnly = false,
@@ -595,10 +596,11 @@ export async function importTimetable({
     for (const row of accepted) {
       await client.query(
         `INSERT INTO timetable_entries
-           (room_id, course_name, teacher, group_name, day_of_week, start_time, end_time, valid_from, valid_to)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           (room_id, term_id, course_name, teacher, group_name, day_of_week, start_time, end_time, valid_from, valid_to)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           row.room_id,
+          termId,
           row.course_name,
           row.teacher_name,
           row.group_name,

@@ -137,23 +137,145 @@ router.post('/cancel-class', authenticate, requireAdmin, async (req, res) => {
 });
 
 /**
+ * GET /api/admin/terms
+ * List all terms with their associated batch year.
+ */
+router.get('/terms', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT t.id, t.batch_id, b.year as batch_year, t.semester_number, t.term_number,
+             t.start_date, t.end_date, t.created_at
+      FROM terms t
+      JOIN batches b ON b.id = t.batch_id
+      ORDER BY b.year DESC, t.term_number ASC
+    `);
+    res.json({ terms: result.rows });
+  } catch (err) {
+    console.error('Fetch terms error:', err);
+    res.status(500).json({ error: 'Failed to fetch terms' });
+  }
+});
+
+/**
+ * POST /api/admin/terms
+ * Create a new term for a batch.
+ */
+router.post('/terms', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { batchYear, semesterNumber, termNumber, startDate, endDate } = req.body;
+
+    if (!batchYear || !semesterNumber || !termNumber || !startDate || !endDate) {
+      return res.status(400).json({
+        error: 'Missing fields',
+        message: 'batchYear, semesterNumber, termNumber, startDate, and endDate are required.',
+      });
+    }
+
+    if (!isValidDateStr(startDate) || !isValidDateStr(endDate)) {
+      return res.status(400).json({
+        error: 'Invalid dates',
+        message: 'startDate and endDate must be real dates in YYYY-MM-DD format.',
+      });
+    }
+
+    if (startDate > endDate) {
+      return res.status(400).json({
+        error: 'Invalid date range',
+        message: 'startDate must be on or before endDate.',
+      });
+    }
+
+    const bYear = parseInt(batchYear, 10);
+    const semNum = parseInt(semesterNumber, 10);
+    const tNum = parseInt(termNumber, 10);
+
+    // Upsert or find batch
+    let batchRes = await query('SELECT id FROM batches WHERE year = $1', [bYear]);
+    let batchId;
+    if (batchRes.rows.length === 0) {
+      const newBatch = await query('INSERT INTO batches (year) VALUES ($1) RETURNING id', [bYear]);
+      batchId = newBatch.rows[0].id;
+    } else {
+      batchId = batchRes.rows[0].id;
+    }
+
+    // Check duplicate term number for this batch
+    const dupRes = await query('SELECT id FROM terms WHERE batch_id = $1 AND term_number = $2', [batchId, tNum]);
+    if (dupRes.rows.length > 0) {
+      return res.status(409).json({
+        error: 'Duplicate term',
+        message: `Term ${tNum} already exists for Batch ${bYear}.`,
+      });
+    }
+
+    // Check same-batch date overlap (C11 rule: terms of same batch cannot overlap)
+    const overlapRes = await query(`
+      SELECT id, term_number, start_date, end_date
+      FROM terms
+      WHERE batch_id = $1
+        AND start_date <= $3
+        AND end_date >= $2
+    `, [batchId, startDate, endDate]);
+
+    if (overlapRes.rows.length > 0) {
+      const clash = overlapRes.rows[0];
+      const startStr = clash.start_date instanceof Date ? clash.start_date.toISOString().slice(0, 10) : String(clash.start_date).slice(0, 10);
+      const endStr = clash.end_date instanceof Date ? clash.end_date.toISOString().slice(0, 10) : String(clash.end_date).slice(0, 10);
+      return res.status(409).json({
+        error: 'Overlapping term',
+        message: `Term dates overlap with Term ${clash.term_number} (${startStr} to ${endStr}) for Batch ${bYear}.`,
+      });
+    }
+
+    const result = await query(`
+      INSERT INTO terms (batch_id, semester_number, term_number, start_date, end_date)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *
+    `, [batchId, semNum, tNum, startDate, endDate]);
+
+    res.status(201).json({
+      term: {
+        ...result.rows[0],
+        batch_year: bYear,
+      },
+    });
+  } catch (err) {
+    console.error('Create term error:', err);
+    res.status(500).json({ error: 'Failed to create term' });
+  }
+});
+
+/**
  * GET /api/admin/timetable
- * Get all timetable entries, optionally filtered by room.
+ * Get all timetable entries, optionally filtered by room or term.
  */
 router.get('/timetable', authenticate, requireAdmin, async (req, res) => {
   try {
     const roomId = req.query.roomId ? parseInt(req.query.roomId, 10) : null;
+    const termId = req.query.termId ? parseInt(req.query.termId, 10) : null;
 
     let sql = `
-      SELECT te.*, r.name as room_name, r.floor
+      SELECT te.*, r.name as room_name, r.floor,
+             t.term_number, b.year as batch_year
       FROM timetable_entries te
       JOIN rooms r ON te.room_id = r.id
+      LEFT JOIN terms t ON te.term_id = t.id
+      LEFT JOIN batches b ON t.batch_id = b.id
     `;
     const params = [];
+    const conditions = [];
 
     if (roomId) {
       params.push(roomId);
-      sql += ` WHERE te.room_id = $${params.length}`;
+      conditions.push(`te.room_id = $${params.length}`);
+    }
+    if (termId) {
+      params.push(termId);
+      conditions.push(`te.term_id = $${params.length}`);
+    }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
     }
 
     sql += ' ORDER BY te.day_of_week, te.start_time';
@@ -192,7 +314,9 @@ router.get('/events', authenticate, requireAdmin, async (req, res) => {
  *
  * multipart/form-data fields:
  *   file                (required) .xlsx export of the Google Sheet
- *   validFrom, validTo  (required) YYYY-MM-DD dates the timetable applies to
+ *   termId              (preferred) ID of the batch's term record
+ *   batchYear, termNumber (alternative to termId)
+ *   validFrom, validTo  (legacy fallback) YYYY-MM-DD dates the timetable applies to
  *   buildingId          (optional, default 1)
  *   saveValidRowsOnly   (optional) "true" to save good rows even if some fail
  */
@@ -214,7 +338,6 @@ router.post('/timetable/import', authenticate, requireAdmin, upload.single('file
     }
 
     const buildingId = parseInt(req.body.buildingId || '1', 10);
-    const { validFrom, validTo } = req.body;
     const saveValidRowsOnly = String(req.body.saveValidRowsOnly) === 'true';
 
     if (!Number.isInteger(buildingId) || buildingId < 1) {
@@ -224,10 +347,56 @@ router.post('/timetable/import', authenticate, requireAdmin, upload.single('file
       });
     }
 
+    let termId = req.body.termId ? parseInt(req.body.termId, 10) : null;
+    let validFrom = req.body.validFrom;
+    let validTo = req.body.validTo;
+
+    // Look up term if termId or batchYear + termNumber provided
+    if (!termId && req.body.batchYear && req.body.termNumber) {
+      const termLookup = await query(`
+        SELECT t.id, t.start_date, t.end_date, b.year as batch_year
+        FROM terms t
+        JOIN batches b ON b.id = t.batch_id
+        WHERE b.year = $1 AND t.term_number = $2
+      `, [parseInt(req.body.batchYear, 10), parseInt(req.body.termNumber, 10)]);
+
+      if (termLookup.rows.length === 0) {
+        return res.status(404).json({
+          error: 'Term not found',
+          message: `No term record found for Batch ${req.body.batchYear} Term ${req.body.termNumber}. Please create the term first.`,
+        });
+      }
+      termId = termLookup.rows[0].id;
+    }
+
+    if (termId) {
+      const termRes = await query(`
+        SELECT t.id, t.start_date, t.end_date, b.year as batch_year, t.term_number
+        FROM terms t
+        JOIN batches b ON b.id = t.batch_id
+        WHERE t.id = $1
+      `, [termId]);
+
+      if (termRes.rows.length === 0) {
+        return res.status(404).json({
+          error: 'Term not found',
+          message: 'The specified term does not exist.',
+        });
+      }
+
+      const term = termRes.rows[0];
+      validFrom = term.start_date instanceof Date
+        ? term.start_date.toISOString().slice(0, 10)
+        : String(term.start_date).slice(0, 10);
+      validTo = term.end_date instanceof Date
+        ? term.end_date.toISOString().slice(0, 10)
+        : String(term.end_date).slice(0, 10);
+    }
+
     if (!isValidDateStr(validFrom) || !isValidDateStr(validTo)) {
       return res.status(400).json({
         error: 'Invalid dates',
-        message: 'validFrom and validTo must be real dates in YYYY-MM-DD format.',
+        message: 'A valid term (or validFrom and validTo in YYYY-MM-DD format) is required.',
       });
     }
 
@@ -241,6 +410,7 @@ router.post('/timetable/import', authenticate, requireAdmin, upload.single('file
     const report = await importTimetable({
       buffer: req.file.buffer,
       buildingId,
+      termId,
       validFrom,
       validTo,
       saveValidRowsOnly,

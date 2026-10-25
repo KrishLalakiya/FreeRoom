@@ -42,13 +42,23 @@ export default function AdminPage() {
   const [cancelReason, setCancelReason] = useState('');
   const [cancellingClass, setCancellingClass] = useState(false);
 
-  // Timetable Room Filter
+  // Timetable Filters
   const [timetableRoomFilter, setTimetableRoomFilter] = useState('');
+  const [timetableTermFilter, setTimetableTermFilter] = useState('');
+
+  // Terms state (C4)
+  const [terms, setTerms] = useState([]);
+  const [selectedTermId, setSelectedTermId] = useState('');
+  const [showCreateTerm, setShowCreateTerm] = useState(false);
+  const [newBatchYear, setNewBatchYear] = useState('2029');
+  const [newSemesterNumber, setNewSemesterNumber] = useState('3');
+  const [newTermNumber, setNewTermNumber] = useState('5');
+  const [newTermStartDate, setNewTermStartDate] = useState('2026-08-01');
+  const [newTermEndDate, setNewTermEndDate] = useState('2026-10-28');
+  const [creatingTerm, setCreatingTerm] = useState(false);
 
   // Timetable import
   const [importFile, setImportFile] = useState(null);
-  const [importValidFrom, setImportValidFrom] = useState(new Date().toISOString().split('T')[0]);
-  const [importValidTo, setImportValidTo] = useState('');
   const [saveValidRowsOnly, setSaveValidRowsOnly] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importReport, setImportReport] = useState(null);
@@ -72,11 +82,12 @@ export default function AdminPage() {
   const loadInitialData = async () => {
     setLoading(true);
     try {
-      const [roomsRes, eventsRes, timetableRes, aliasesRes] = await Promise.all([
+      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes] = await Promise.all([
         roomsAPI.list(1),
         adminAPI.getEvents(),
         adminAPI.getTimetable(),
         adminAPI.getRoomAliases(),
+        adminAPI.getTerms(),
       ]);
 
       const rList = roomsRes.data.rooms || [];
@@ -88,6 +99,12 @@ export default function AdminPage() {
       setEvents(eventsRes.data.events || []);
       setTimetable(timetableRes.data.entries || []);
       setAliases(aliasesRes.data.aliases || []);
+
+      const tList = termsRes.data.terms || [];
+      setTerms(tList);
+      if (tList.length > 0) {
+        setSelectedTermId((current) => current || tList[0].id.toString());
+      }
     } catch (err) {
       console.error('Failed to load admin data:', err);
       toast.error('Failed to load admin data');
@@ -177,9 +194,44 @@ export default function AdminPage() {
     }
   };
 
-  const filteredTimetable = timetableRoomFilter
-    ? timetable.filter((te) => te.room_id.toString() === timetableRoomFilter)
-    : timetable;
+  const filteredTimetable = timetable.filter((te) => {
+    if (timetableRoomFilter && te.room_id.toString() !== timetableRoomFilter) return false;
+    if (timetableTermFilter && te.term_id?.toString() !== timetableTermFilter) return false;
+    return true;
+  });
+
+  const handleCreateTerm = async (e) => {
+    e.preventDefault();
+    if (!newBatchYear || !newSemesterNumber || !newTermNumber || !newTermStartDate || !newTermEndDate) {
+      toast.error('Please fill in all term fields');
+      return;
+    }
+    if (newTermStartDate > newTermEndDate) {
+      toast.error('Start date must be before end date');
+      return;
+    }
+
+    setCreatingTerm(true);
+    try {
+      const res = await adminAPI.createTerm({
+        batchYear: parseInt(newBatchYear, 10),
+        semesterNumber: parseInt(newSemesterNumber, 10),
+        termNumber: parseInt(newTermNumber, 10),
+        startDate: newTermStartDate,
+        endDate: newTermEndDate,
+      });
+
+      toast.success(`Created Term ${res.data.term.term_number} for Batch ${res.data.term.batch_year}`);
+      const refreshed = await adminAPI.getTerms();
+      setTerms(refreshed.data.terms || []);
+      setSelectedTermId(res.data.term.id.toString());
+      setShowCreateTerm(false);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to create term');
+    } finally {
+      setCreatingTerm(false);
+    }
+  };
 
   const handleImportTimetable = async (e) => {
     e.preventDefault();
@@ -188,20 +240,15 @@ export default function AdminPage() {
       toast.error('Choose an .xlsx file to upload');
       return;
     }
-    if (!importValidFrom || !importValidTo) {
-      toast.error('Set the timetable validity dates');
-      return;
-    }
-    if (importValidFrom > importValidTo) {
-      toast.error('Valid-from must be before valid-to');
+    if (!selectedTermId) {
+      toast.error('Please select the Batch and Term for this timetable');
       return;
     }
 
     const formData = new FormData();
     formData.append('file', importFile);
     formData.append('buildingId', '1');
-    formData.append('validFrom', importValidFrom);
-    formData.append('validTo', importValidTo);
+    formData.append('termId', selectedTermId);
     formData.append('saveValidRowsOnly', saveValidRowsOnly ? 'true' : 'false');
 
     setImporting(true);
@@ -515,21 +562,40 @@ export default function AdminPage() {
               <p className="section-subtitle">Showing all recurring class slots across the academic week.</p>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <label className="input-label" style={{ marginBottom: 0 }}>Filter Room:</label>
-              <select
-                className="input-field"
-                style={{ width: 'auto', padding: '6px 12px' }}
-                value={timetableRoomFilter}
-                onChange={(e) => setTimetableRoomFilter(e.target.value)}
-              >
-                <option value="">All Rooms</option>
-                {rooms.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    Room {r.name}
-                  </option>
-                ))}
-              </select>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <label className="input-label" style={{ marginBottom: 0 }}>Term:</label>
+                <select
+                  className="input-field"
+                  style={{ width: 'auto', padding: '6px 12px' }}
+                  value={timetableTermFilter}
+                  onChange={(e) => setTimetableTermFilter(e.target.value)}
+                >
+                  <option value="">All Terms</option>
+                  {terms.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      Batch {t.batch_year} (T{t.term_number})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <label className="input-label" style={{ marginBottom: 0 }}>Room:</label>
+                <select
+                  className="input-field"
+                  style={{ width: 'auto', padding: '6px 12px' }}
+                  value={timetableRoomFilter}
+                  onChange={(e) => setTimetableRoomFilter(e.target.value)}
+                >
+                  <option value="">All Rooms</option>
+                  {rooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      Room {r.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
 
@@ -539,6 +605,7 @@ export default function AdminPage() {
                 <tr>
                   <th>Day</th>
                   <th>Time</th>
+                  <th>Batch / Term</th>
                   <th>Room</th>
                   <th>Course</th>
                   <th>Teacher</th>
@@ -553,6 +620,15 @@ export default function AdminPage() {
                     </td>
                     <td>
                       {te.start_time} - {te.end_time}
+                    </td>
+                    <td>
+                      {te.batch_year ? (
+                        <span className="room-card-floor" style={{ background: 'rgba(56, 189, 248, 0.12)', color: 'var(--accent-primary-light)' }}>
+                          {te.batch_year} (T{te.term_number})
+                        </span>
+                      ) : (
+                        '--'
+                      )}
                     </td>
                     <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                       Room {te.room_name} ({te.floor} Fl)
@@ -579,8 +655,8 @@ export default function AdminPage() {
                 Upload Weekly Timetable
               </h2>
               <p className="section-subtitle" style={{ marginBottom: 16 }}>
-                Upload the .xlsx export of the Google Sheet. Merged class blocks, room-name variants and
-                lunch cells are handled automatically. Identical classes across groups are de-duplicated.
+                Upload the .xlsx export for a batch and term. Each batch has its own sheet and term schedule.
+                Historical terms remain intact.
               </p>
 
               <form onSubmit={handleImportTimetable}>
@@ -595,28 +671,132 @@ export default function AdminPage() {
                   />
                 </div>
 
-                <div className="form-row">
-                  <div className="input-group">
-                    <label className="input-label">Valid From</label>
-                    <input
-                      type="date"
-                      className="input-field"
-                      value={importValidFrom}
-                      onChange={(e) => setImportValidFrom(e.target.value)}
-                      required
-                    />
+                <div className="input-group">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <label className="input-label" style={{ marginBottom: 0 }}>Batch & Term</label>
+                    <button
+                      type="button"
+                      className="btn btn-ghost"
+                      style={{ padding: '2px 8px', fontSize: '0.8rem' }}
+                      onClick={() => setShowCreateTerm(!showCreateTerm)}
+                    >
+                      {showCreateTerm ? 'Cancel' : '+ Add New Term'}
+                    </button>
                   </div>
-                  <div className="input-group">
-                    <label className="input-label">Valid To</label>
-                    <input
-                      type="date"
-                      className="input-field"
-                      value={importValidTo}
-                      onChange={(e) => setImportValidTo(e.target.value)}
-                      required
-                    />
-                  </div>
+                  <select
+                    className="input-field"
+                    value={selectedTermId}
+                    onChange={(e) => setSelectedTermId(e.target.value)}
+                    required
+                  >
+                    <option value="">-- Choose Batch & Term --</option>
+                    {terms.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        Batch {t.batch_year} — Term {t.term_number} (Sem {t.semester_number}) [{String(t.start_date).slice(0, 10)} to {String(t.end_date).slice(0, 10)}]
+                      </option>
+                    ))}
+                  </select>
                 </div>
+
+                {terms.find((t) => t.id.toString() === selectedTermId.toString()) && (
+                  <div style={{
+                    padding: '10px 14px',
+                    background: 'rgba(56, 189, 248, 0.08)',
+                    border: '1px solid rgba(56, 189, 248, 0.25)',
+                    borderRadius: 'var(--radius-md)',
+                    marginBottom: 16,
+                    fontSize: '0.85rem',
+                  }}>
+                    {(() => {
+                      const t = terms.find((term) => term.id.toString() === selectedTermId.toString());
+                      return (
+                        <>
+                          <div style={{ fontWeight: 600, color: 'var(--accent-primary-light)' }}>
+                            Batch {t.batch_year} • Semester {t.semester_number} • Term {t.term_number}
+                          </div>
+                          <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
+                            Term Duration: <strong>{String(t.start_date).slice(0, 10)}</strong> to <strong>{String(t.end_date).slice(0, 10)}</strong>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                {showCreateTerm && (
+                  <div style={{
+                    padding: '14px',
+                    background: 'rgba(255, 255, 255, 0.03)',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-md)',
+                    marginBottom: 16,
+                  }}>
+                    <h3 style={{ fontSize: '0.95rem', marginBottom: 10, color: 'var(--text-primary)' }}>
+                      Add New Term
+                    </h3>
+                    <div className="form-row">
+                      <div className="input-group">
+                        <label className="input-label">Batch Year</label>
+                        <input
+                          type="number"
+                          className="input-field"
+                          placeholder="e.g. 2029"
+                          value={newBatchYear}
+                          onChange={(e) => setNewBatchYear(e.target.value)}
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">Semester #</label>
+                        <input
+                          type="number"
+                          className="input-field"
+                          placeholder="e.g. 3"
+                          value={newSemesterNumber}
+                          onChange={(e) => setNewSemesterNumber(e.target.value)}
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">Term #</label>
+                        <input
+                          type="number"
+                          className="input-field"
+                          placeholder="e.g. 5"
+                          value={newTermNumber}
+                          onChange={(e) => setNewTermNumber(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="form-row">
+                      <div className="input-group">
+                        <label className="input-label">Start Date</label>
+                        <input
+                          type="date"
+                          className="input-field"
+                          value={newTermStartDate}
+                          onChange={(e) => setNewTermStartDate(e.target.value)}
+                        />
+                      </div>
+                      <div className="input-group">
+                        <label className="input-label">End Date</label>
+                        <input
+                          type="date"
+                          className="input-field"
+                          value={newTermEndDate}
+                          onChange={(e) => setNewTermEndDate(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      style={{ fontSize: '0.85rem', padding: '6px 14px' }}
+                      disabled={creatingTerm}
+                      onClick={handleCreateTerm}
+                    >
+                      {creatingTerm ? 'Saving...' : 'Save Term'}
+                    </button>
+                  </div>
+                )}
 
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: 12 }}>
                   <input
