@@ -337,15 +337,19 @@ function makeTimeResolver(grid, rows, cols, fromRow, toRow, dayColumns, colStart
 
 function findGroupHeaders(grid, rows, cols) {
   const headers = [];
-  for (let r = 0; r < rows; r += 1) {
+  const maxRow = Math.min(rows, 10);
+  for (let r = 0; r < maxRow; r += 1) {
     for (let c = 0; c < cols; c += 1) {
       const value = grid[r][c];
       if (typeof value !== 'string') continue;
-      const match = value.replace(/\s+/g, ' ').trim().match(/^(?:group|grp)\.?\s*[:\-]?\s*([abc])$/i);
+      const clean = value.replace(/\s+/g, ' ').trim();
+      const match = clean.match(/\b(?:group|grp)\.?\s*[:\-]?\s*([abc])\b/i);
       if (match) {
         headers.push({ row: r, col: c, group: match[1].toUpperCase() });
-        break;
       }
+    }
+    if (headers.length > 0) {
+      break;
     }
   }
   return headers;
@@ -442,6 +446,7 @@ export function parseTimetableWorkbook(buffer) {
 
     for (const [dayOfWeekStr, col] of Object.entries(dayColumns)) {
       const dayOfWeek = Number(dayOfWeekStr);
+      let lastClassInCol = null;
 
       for (let r = firstDataRow; r <= section.endRow; r += 1) {
         if (covered.has(`${r},${col}`)) continue;
@@ -479,7 +484,42 @@ export function parseTimetableWorkbook(buffer) {
           continue;
         }
 
-        classes.push({
+        // Handle standalone Lab cell (C21)
+        if (parsed.isLabOnly) {
+          if (lastClassInCol) {
+            const labClass = {
+              sheetRow: r + 1,
+              column: col + 1,
+              dayOfWeek,
+              startTime: minutesToTime(startMinutes),
+              endTime: minutesToTime(endMinutes),
+              course: `${lastClassInCol.subject} (Lab)`,
+              subject: lastClassInCol.subject,
+              teacher: lastClassInCol.teacher,
+              group: lastClassInCol.group,
+              groups: lastClassInCol.groups,
+              roomName: lastClassInCol.roomName,
+              entryType: 'lab',
+              raw: String(value),
+            };
+            classes.push(labClass);
+          } else {
+            warnings.push({
+              sheetRow: r + 1,
+              dayOfWeek,
+              column: col + 1,
+              value: String(value),
+              reason: 'Standalone Lab cell has no class above it in the column to inherit from.',
+            });
+          }
+          continue;
+        }
+
+        const explicitGroups = parsed.groups.length > 0
+          ? parsed.groups
+          : (parsed.group ? [parsed.group] : []);
+
+        const classObj = {
           sheetRow: r + 1,
           column: col + 1,
           dayOfWeek,
@@ -488,12 +528,15 @@ export function parseTimetableWorkbook(buffer) {
           course: parsed.course,
           subject: parsed.subject || parsed.course,
           teacher: parsed.teacher,
-          group: parsed.group || section.group,
-          groups: (parsed.groups && parsed.groups.length > 0) ? parsed.groups : (section.group ? [section.group] : []),
+          group: explicitGroups[0] || (explicitGroups.length === 0 ? null : section.group),
+          groups: explicitGroups,
           roomName: parsed.roomName,
           entryType: parsed.entryType || 'class',
           raw: String(value),
-        });
+        };
+
+        classes.push(classObj);
+        lastClassInCol = classObj;
       }
     }
   }
@@ -560,6 +603,34 @@ export async function importTimetable({
       if (!key) return null;
       if (aliasByKey.has(key)) return aliasByKey.get(key);
       if (roomByKey.has(key)) return roomByKey.get(key).id;
+
+      // PRD v2 C21 room variations fallback matching
+      if (/c\s*(?:ground\s*floor|groundfloor)/i.test(key) || /(?:ground\s*floor|groundfloor)\s*.*c/i.test(key)) {
+        for (const [rKey, r] of roomByKey.entries()) {
+          if (rKey.includes('ground') && rKey.includes('c')) return r.id;
+        }
+      }
+      if (/b\s*1st\s*floor/i.test(key) || /1st\s*floor\s*.*b/i.test(key) || /\b1b\b/i.test(key)) {
+        for (const [rKey, r] of roomByKey.entries()) {
+          if (rKey.includes('1b') || (rKey.includes('1st') && rKey.includes('b'))) return r.id;
+        }
+      }
+      if (/a\s*(?:1st|ist)\s*floor/i.test(key) || /(?:1st|ist)\s*floor\s*.*a/i.test(key) || /\b1a\b/i.test(key)) {
+        for (const [rKey, r] of roomByKey.entries()) {
+          if (rKey.includes('1a') || (rKey.includes('1st') && rKey.includes('a'))) return r.id;
+        }
+      }
+      if (/a\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*a/i.test(key) || /\b2a\b/i.test(key)) {
+        for (const [rKey, r] of roomByKey.entries()) {
+          if (rKey.includes('2a') || (rKey.includes('2nd') && rKey.includes('a'))) return r.id;
+        }
+      }
+      if (/c\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*c/i.test(key) || /\b2c\b/i.test(key)) {
+        for (const [rKey, r] of roomByKey.entries()) {
+          if (rKey.includes('2c') || (rKey.includes('2nd') && rKey.includes('c'))) return r.id;
+        }
+      }
+
       return null;
     };
 

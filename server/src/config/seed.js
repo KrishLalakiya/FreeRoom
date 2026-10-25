@@ -49,6 +49,8 @@ async function seed() {
     const aliases = [
       { alias: 'C groundfloor', roomId: roomC },
       { alias: 'Classroom C', roomId: roomC },
+      { alias: 'Class C Ground floor', roomId: roomC },
+      { alias: 'Class C ground floor', roomId: roomC },
       { alias: 'Classroom A 1st floor', roomId: room1A },
       { alias: 'Class A 1st floor', roomId: room1A },
       { alias: 'Classroom A ist floor', roomId: room1A },
@@ -56,8 +58,12 @@ async function seed() {
       { alias: 'Classroom B 1st floor', roomId: room1B },
       { alias: 'Class B 1st floor', roomId: room1B },
       { alias: 'Block B', roomId: room1B },
+      { alias: 'Class A 2nd floor', roomId: room2A },
+      { alias: 'Classroom A 2nd floor', roomId: room2A },
+      { alias: 'Classroom A, 2nd Floor', roomId: room2A },
       { alias: 'Class C 2nd floor', roomId: room2C },
       { alias: 'Classroom C 2nd floor', roomId: room2C },
+      { alias: 'Classroom C, 2nd Floor', roomId: room2C },
     ];
 
     for (const a of aliases) {

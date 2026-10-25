@@ -127,13 +127,14 @@ describe('parseTimetableWorkbook', () => {
     expect(ds.dayOfWeek).toBe(2);
   });
 
-  it('imports Academic Clubs with the ground-floor room', () => {
+  it('imports Academic Clubs with the ground-floor room and club entryType', () => {
     const clubs = result.classes.find((c) => c.course === 'Academic Clubs');
     expect(clubs).toBeDefined();
     expect(clubs.startTime).toBe('17:30');
     expect(clubs.endTime).toBe('20:00');
     expect(clubs.roomName).toBe('C groundfloor');
-    expect(clubs.group).toBe('A');
+    expect(clubs.group).toBeNull();
+    expect(clubs.entryType).toBe('club');
   });
 
   it('ignores lunch cells and reports no warnings for this sheet', () => {
@@ -143,5 +144,35 @@ describe('parseTimetableWorkbook', () => {
 
   it('only parses one class per merged block', () => {
     expect(result.classes).toHaveLength(3);
+  });
+});
+
+describe('Sheet differences handling (C21)', () => {
+  it('parses combined groups (Grp A+B)', () => {
+    const parsed = parseClassCell('C++ - 2028\nGrp A+B\nclass C Ground floor');
+    expect(parsed.groups).toEqual(['A', 'B']);
+    expect(parsed.subject).toBe('C++');
+    expect(parsed.roomName).toBe('class C Ground floor');
+  });
+
+  it('handles classes with no group (whole batch)', () => {
+    const parsed = parseClassCell('Advance Graph Algorithms [HFT]\nClass B 1st floor');
+    expect(parsed.groups).toEqual([]);
+    expect(parsed.group).toBeNull();
+    expect(parsed.subject).toBe('Advance Graph Algorithms');
+    expect(parsed.roomName).toBe('Class B 1st floor');
+  });
+
+  it('handles FDE room in parentheses', () => {
+    const parsed = parseClassCell('FDE (Classroom A, 2nd Floor)');
+    expect(parsed.subject).toBe('FDE');
+    expect(parsed.roomName).toBe('Classroom A, 2nd Floor');
+    expect(parsed.teacher).toBeNull();
+  });
+
+  it('detects standalone Lab cell', () => {
+    const parsed = parseClassCell('Lab');
+    expect(parsed.isLabOnly).toBe(true);
+    expect(parsed.entryType).toBe('lab');
   });
 });
