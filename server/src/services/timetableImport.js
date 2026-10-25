@@ -1,3 +1,4 @@
+import fs from 'fs';
 import XLSX from 'xlsx';
 import { getClient } from '../config/db.js';
 
@@ -19,6 +20,7 @@ const DEFAULT_STEP_MINUTES = 15;
 export function normalizeRoomKey(name) {
   return String(name || '')
     .toLowerCase()
+    .replace(/[,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -359,7 +361,10 @@ function findGroupHeaders(grid, rows, cols) {
  * Parse the weekly sheet into class rows without touching the database.
  */
 export function parseTimetableWorkbook(buffer) {
-  const workbook = XLSX.read(buffer, { type: 'buffer', cellDates: false });
+  const buf = typeof buffer === 'string'
+    ? fs.readFileSync(buffer)
+    : buffer;
+  const workbook = XLSX.read(buf, { type: 'buffer', cellDates: false });
 
   const candidates = [];
   for (const name of workbook.SheetNames) {
@@ -555,14 +560,25 @@ function timetableKey(row) {
 /**
  * Import parsed rows into the timetable for a building.
  */
-export async function importTimetable({
-  buffer,
-  buildingId,
-  termId = null,
-  validFrom,
-  validTo,
-  saveValidRowsOnly = false,
-}) {
+export async function importTimetable(fileOrOptions, maybeOptions = {}) {
+  let options = {};
+  if (Buffer.isBuffer(fileOrOptions) || typeof fileOrOptions === 'string') {
+    options = { buffer: fileOrOptions, ...maybeOptions };
+  } else if (fileOrOptions && typeof fileOrOptions === 'object') {
+    options = { ...fileOrOptions, ...maybeOptions };
+  }
+
+  let {
+    buffer,
+    buildingId,
+    termId = null,
+    validFrom,
+    validTo,
+    saveValidRowsOnly = false,
+    batchYear,
+    termNumber,
+  } = options;
+
   const parsed = parseTimetableWorkbook(buffer);
 
   const client = await getClient();
@@ -572,8 +588,29 @@ export async function importTimetable({
   try {
     await client.query('BEGIN');
 
+    if (!buildingId) {
+      const bRes = await client.query('SELECT id FROM buildings ORDER BY id ASC LIMIT 1');
+      if (bRes.rows.length > 0) {
+        buildingId = bRes.rows[0].id;
+      }
+    }
+
+    if (!termId && batchYear && termNumber) {
+      const termLookup = await client.query(`
+        SELECT t.id, t.start_date, t.end_date
+        FROM terms t
+        JOIN batches b ON b.id = t.batch_id
+        WHERE b.year = $1 AND t.term_number = $2
+      `, [batchYear, termNumber]);
+      if (termLookup.rows.length > 0) {
+        termId = termLookup.rows[0].id;
+        if (!validFrom) validFrom = termLookup.rows[0].start_date;
+        if (!validTo) validTo = termLookup.rows[0].end_date;
+      }
+    }
+
     const roomRes = await client.query(
-      'SELECT id, name, parent_room_id FROM rooms WHERE building_id = $1',
+      'SELECT id, name, floor, parent_room_id FROM rooms WHERE building_id = $1',
       [buildingId]
     );
     if (roomRes.rows.length === 0) {
@@ -605,29 +642,29 @@ export async function importTimetable({
       if (roomByKey.has(key)) return roomByKey.get(key).id;
 
       // PRD v2 C21 room variations fallback matching
-      if (/c\s*(?:ground\s*floor|groundfloor)/i.test(key) || /(?:ground\s*floor|groundfloor)\s*.*c/i.test(key)) {
-        for (const [rKey, r] of roomByKey.entries()) {
-          if (rKey.includes('ground') && rKey.includes('c')) return r.id;
+      if (/c\s*(?:ground\s*floor|groundfloor)/i.test(key) || /(?:ground\s*floor|groundfloor)\s*.*c/i.test(key) || key === 'c ground floor' || key === 'class c ground floor') {
+        for (const r of roomsById.values()) {
+          if (r.floor?.toLowerCase().includes('ground') && r.name.toLowerCase() === 'c') return r.id;
         }
       }
       if (/b\s*1st\s*floor/i.test(key) || /1st\s*floor\s*.*b/i.test(key) || /\b1b\b/i.test(key)) {
-        for (const [rKey, r] of roomByKey.entries()) {
-          if (rKey.includes('1b') || (rKey.includes('1st') && rKey.includes('b'))) return r.id;
+        for (const r of roomsById.values()) {
+          if (r.floor?.toLowerCase().includes('1st') && (r.name.toLowerCase() === '1b' || r.name.toLowerCase() === 'b')) return r.id;
         }
       }
       if (/a\s*(?:1st|ist)\s*floor/i.test(key) || /(?:1st|ist)\s*floor\s*.*a/i.test(key) || /\b1a\b/i.test(key)) {
-        for (const [rKey, r] of roomByKey.entries()) {
-          if (rKey.includes('1a') || (rKey.includes('1st') && rKey.includes('a'))) return r.id;
+        for (const r of roomsById.values()) {
+          if (r.floor?.toLowerCase().includes('1st') && (r.name.toLowerCase() === '1a' || r.name.toLowerCase() === 'a')) return r.id;
         }
       }
       if (/a\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*a/i.test(key) || /\b2a\b/i.test(key)) {
-        for (const [rKey, r] of roomByKey.entries()) {
-          if (rKey.includes('2a') || (rKey.includes('2nd') && rKey.includes('a'))) return r.id;
+        for (const r of roomsById.values()) {
+          if (r.floor?.toLowerCase().includes('2nd') && (r.name.toLowerCase() === '2a' || r.name.toLowerCase() === 'a')) return r.id;
         }
       }
       if (/c\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*c/i.test(key) || /\b2c\b/i.test(key)) {
-        for (const [rKey, r] of roomByKey.entries()) {
-          if (rKey.includes('2c') || (rKey.includes('2nd') && rKey.includes('c'))) return r.id;
+        for (const r of roomsById.values()) {
+          if (r.floor?.toLowerCase().includes('2nd') && (r.name.toLowerCase() === '2c' || r.name.toLowerCase() === 'c')) return r.id;
         }
       }
 
@@ -645,10 +682,10 @@ export async function importTimetable({
     };
 
     let batchId = null;
-    let batchYear = null;
+    let batchYearResolved = null;
     if (termId) {
       const termRes = await client.query(
-        `SELECT t.batch_id, b.year as batch_year
+        `SELECT t.batch_id, b.year as batch_year, t.start_date, t.end_date
          FROM terms t
          JOIN batches b ON b.id = t.batch_id
          WHERE t.id = $1`,
@@ -656,9 +693,14 @@ export async function importTimetable({
       );
       if (termRes.rows.length > 0) {
         batchId = termRes.rows[0].batch_id;
-        batchYear = termRes.rows[0].batch_year;
+        batchYearResolved = termRes.rows[0].batch_year;
+        if (!validFrom) validFrom = termRes.rows[0].start_date;
+        if (!validTo) validTo = termRes.rows[0].end_date;
       }
     }
+
+    if (!validFrom) validFrom = '2000-01-01';
+    if (!validTo) validTo = '2099-12-31';
 
     const existingRes = await client.query(
       `SELECT te.id, te.room_id, te.course_name, te.teacher, te.day_of_week,

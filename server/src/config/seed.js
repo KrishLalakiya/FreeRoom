@@ -1,5 +1,8 @@
+import fs from 'fs';
+import path from 'path';
 import { getClient } from './db.js';
 import migrate from './migrate.js';
+import { importTimetable } from '../services/timetableImport.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -119,80 +122,8 @@ async function seed() {
     const instDas = await upsertInstructor(client, 'Das');
     const instVerma = await upsertInstructor(client, 'Verma');
 
-    // ── Sample timetable entries ───────────────────────────
-    // Each entry now carries term_id, subject_id, instructor_id, entry_type
-    // and is linked to groups via the junction table.
-    const sampleClasses = [
-      // Monday (1) — batch 2029
-      { termId: term5, roomId: room1A, subjectId: subMERN, instructorId: instMrinal, groups: [grpA_2029], day: 1, start: '10:00', end: '12:00', type: 'class' },
-      { termId: term5, roomId: room1B, subjectId: subDS, instructorId: instSharma, groups: [grpB_2029], day: 1, start: '10:00', end: '12:00', type: 'class' },
-      { termId: term5, roomId: room2A, subjectId: subOS, instructorId: instGupta, groups: [grpC_2029], day: 1, start: '14:00', end: '16:00', type: 'class' },
-      { termId: term5, roomId: room2B, subjectId: subCN, instructorId: instSingh, groups: [grpA_2029], day: 1, start: '14:00', end: '16:00', type: 'class' },
-      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 1, start: '17:30', end: '20:00', type: 'club' },
-
-      // Tuesday (2)
-      { termId: term5, roomId: room1A, subjectId: subFDSA, instructorId: instKumar, groups: [grpA_2029], day: 2, start: '09:00', end: '11:00', type: 'class' },
-      { termId: term5, roomId: room2C, subjectId: subDB, instructorId: instPatel, groups: [grpB_2029], day: 2, start: '09:00', end: '11:00', type: 'class' },
-      { termId: term5, roomId: room1B, subjectId: subWeb, instructorId: instMehta, groups: [grpC_2029], day: 2, start: '11:00', end: '13:00', type: 'class' },
-      { termId: term5, roomId: room2B1, subjectId: subML, instructorId: instJain, groups: [grpA_2029], day: 2, start: '14:00', end: '16:00', type: 'class' },
-      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 2, start: '17:30', end: '20:00', type: 'club' },
-
-      // Wednesday (3)
-      { termId: term5, roomId: room1A, subjectId: subMERN, instructorId: instMrinal, groups: [grpB_2029], day: 3, start: '10:00', end: '12:00', type: 'class' },
-      { termId: term5, roomId: room2A, subjectId: subCloud, instructorId: instReddy, groups: [grpA_2029], day: 3, start: '10:00', end: '12:00', type: 'class' },
-      { termId: term5, roomId: room2B2, subjectId: subAlgo, instructorId: instDas, groups: [grpC_2029], day: 3, start: '14:00', end: '16:00', type: 'class' },
-      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 3, start: '17:30', end: '20:00', type: 'club' },
-
-      // Thursday (4)
-      { termId: term5, roomId: room1B, subjectId: subFDSA, instructorId: instKumar, groups: [grpB_2029], day: 4, start: '09:00', end: '11:00', type: 'class' },
-      { termId: term5, roomId: room2C, subjectId: subCN, instructorId: instSingh, groups: [grpC_2029], day: 4, start: '09:00', end: '11:00', type: 'class' },
-      { termId: term5, roomId: room1A, subjectId: subDevOps, instructorId: instVerma, groups: [grpA_2029], day: 4, start: '11:00', end: '13:00', type: 'class' },
-      { termId: term5, roomId: room2B, subjectId: subCapstone, instructorId: instMrinal, groups: [grpA_2029, grpB_2029, grpC_2029], day: 4, start: '14:00', end: '17:00', type: 'class' },
-      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 4, start: '17:30', end: '20:00', type: 'club' },
-
-      // Friday (5)
-      { termId: term5, roomId: room1A, subjectId: subCloud, instructorId: instReddy, groups: [grpC_2029], day: 5, start: '10:00', end: '12:00', type: 'class' },
-      { termId: term5, roomId: room1B, subjectId: subML, instructorId: instJain, groups: [grpB_2029], day: 5, start: '10:00', end: '12:00', type: 'class' },
-      { termId: term5, roomId: room2A, subjectId: subMERN, instructorId: instMrinal, groups: [grpC_2029], day: 5, start: '14:00', end: '16:00', type: 'class' },
-      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 5, start: '17:30', end: '20:00', type: 'club' },
-
-      // Saturday (6)
-      { termId: term5, roomId: room1A, subjectId: subFDSAR, instructorId: instKumar, groups: [grpA_2029, grpB_2029, grpC_2029], day: 6, start: '10:00', end: '12:00', type: 'class' },
-      { termId: term5, roomId: room2B1, subjectId: subWorkshop, instructorId: instSingh, groups: [grpA_2029], day: 6, start: '10:00', end: '12:00', type: 'lab' },
-    ];
-
-    for (const cls of sampleClasses) {
-      const subjectName = await getSubjectName(client, cls.subjectId);
-      const instructorName = cls.instructorId ? await getInstructorName(client, cls.instructorId) : null;
-      const groupNames = [];
-      for (const gId of cls.groups) {
-        groupNames.push(await getGroupName(client, gId));
-      }
-
-      const entryRes = await client.query(`
-        INSERT INTO timetable_entries
-          (room_id, term_id, subject_id, instructor_id, entry_type,
-           day_of_week, start_time, end_time,
-           course_name, teacher, group_name, valid_from, valid_to)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        RETURNING id;
-      `, [
-        cls.roomId, cls.termId, cls.subjectId, cls.instructorId, cls.type,
-        cls.day, cls.start, cls.end,
-        subjectName, instructorName,
-        groupNames.length > 0 ? groupNames.join('+') : null,
-        '2026-08-01', '2026-10-28',
-      ]);
-
-      const entryId = entryRes.rows[0].id;
-      for (const gId of cls.groups) {
-        await client.query(`
-          INSERT INTO timetable_entry_groups (timetable_entry_id, group_id)
-          VALUES ($1, $2)
-          ON CONFLICT DO NOTHING;
-        `, [entryId, gId]);
-      }
-    }
+    // ── Clear timetable entries (v1 hardcoded entries) ────
+    await client.query('DELETE FROM timetable_entries;');
 
     // ── Create a dev admin user ────────────────────────────
     await client.query(`
@@ -202,19 +133,68 @@ async function seed() {
     `);
 
     await client.query('COMMIT');
-    console.log('🌱 Seed completed successfully');
-    console.log(`   Building: Pilot Building (id=${buildingId})`);
-    console.log(`   Rooms: C, 1A, 1B, 2A, 2B (2B1+2B2), 2C`);
-    console.log(`   Batches: 2028, 2029`);
-    console.log(`   Terms: Term 5 (batch 2029), Term 9 (batch 2028)`);
-    console.log(`   Timetable entries: ${sampleClasses.length}`);
-    console.log(`   Room aliases: ${aliases.length}`);
+    console.log('🌱 Base seed completed successfully (rooms, batches, terms, aliases)');
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('❌ Seed failed:', err);
+    console.error('❌ Seed failed during base setup:', err);
     throw err;
   } finally {
     client.release();
+  }
+
+  // ── Import real timetable sheets (C4, C18) ───────────────
+  const findExcelFile = (filename) => {
+    const candidates = [
+      path.resolve(process.cwd(), '..', filename),
+      path.resolve(process.cwd(), filename),
+      path.resolve(import.meta.dirname, '../../../', filename),
+      path.resolve(import.meta.dirname, '../../..', filename),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p;
+    }
+    throw new Error(`Could not find Excel file "${filename}"`);
+  };
+
+  const file2029 = findExcelFile('SST 2029 Batch Term 5 Syllabus.xlsx');
+  const file2028 = findExcelFile('SST 2028 Batch Term 9 Syllabus.xlsx');
+
+  console.log(`📥 Importing 2029 Term 5 from ${file2029}...`);
+  const res2029 = await importTimetable(file2029, { batchYear: 2029, termNumber: 5 });
+  console.log(`   2029 T5: parsed=${res2029.parsedCount}, saved=${res2029.savedCount}, duplicates=${res2029.duplicateCount}, unmapped=${res2029.unmappedRooms.length}, errors=${res2029.errors.length}`);
+  if (res2029.errors.length > 0) {
+    console.warn('   Errors in 2029 T5:', res2029.errors);
+  }
+
+  console.log(`📥 Importing 2028 Term 9 from ${file2028}...`);
+  const res2028 = await importTimetable(file2028, { batchYear: 2028, termNumber: 9 });
+  console.log(`   2028 T9: parsed=${res2028.parsedCount}, saved=${res2028.savedCount}, duplicates=${res2028.duplicateCount}, unmapped=${res2028.unmappedRooms.length}, errors=${res2028.errors.length}`);
+  if (res2028.errors.length > 0) {
+    console.warn('   Errors in 2028 T9:', res2028.errors);
+  }
+
+  // Verify in DB
+  const verifyClient = await getClient();
+  try {
+    const countRes = await verifyClient.query(`
+      SELECT
+        COUNT(*) AS total_entries,
+        COUNT(CASE WHEN term_id IS NULL THEN 1 END) AS missing_term,
+        COUNT(CASE WHEN subject_id IS NULL THEN 1 END) AS missing_subject
+      FROM timetable_entries;
+    `);
+    const groupCountRes = await verifyClient.query(`
+      SELECT COUNT(*) AS total_group_links FROM timetable_entry_groups;
+    `);
+    const stats = countRes.rows[0];
+    const groupStats = groupCountRes.rows[0];
+    console.log(`✅ DB verification:`);
+    console.log(`   Total entries: ${stats.total_entries}`);
+    console.log(`   Missing term_id: ${stats.missing_term}`);
+    console.log(`   Missing subject_id: ${stats.missing_subject}`);
+    console.log(`   Total group links: ${groupStats.total_group_links}`);
+  } finally {
+    verifyClient.release();
   }
 }
 
@@ -302,7 +282,10 @@ const isMainModule = process.argv[1]?.includes('seed');
 if (isMainModule) {
   seed()
     .then(() => process.exit(0))
-    .catch(() => process.exit(1));
+    .catch((err) => {
+      console.error('❌ Top-level seed error:', err);
+      process.exit(1);
+    });
 }
 
 export default seed;
