@@ -248,6 +248,47 @@ async function migrate() {
       );
     `);
 
+    // ── Closures (C6: room, floor, or building closures/exams) ──
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS closures (
+        id          SERIAL PRIMARY KEY,
+        scope       VARCHAR(20) NOT NULL CHECK (scope IN ('room', 'floor', 'building')),
+        building_id INTEGER REFERENCES buildings(id) ON DELETE CASCADE,
+        room_id     INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+        floor       VARCHAR(50),
+        start_date  DATE NOT NULL,
+        end_date    DATE NOT NULL,
+        start_time  TIME,
+        end_time    TIME,
+        reason      VARCHAR(255) NOT NULL DEFAULT 'Exam',
+        note        TEXT,
+        created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (start_date <= end_date),
+        CHECK (
+          (start_time IS NULL AND end_time IS NULL) OR
+          (start_time IS NOT NULL AND end_time IS NOT NULL AND start_time < end_time)
+        ),
+        CHECK (scope != 'room' OR room_id IS NOT NULL),
+        CHECK (scope != 'floor' OR floor IS NOT NULL)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_closures_dates
+      ON closures (start_date, end_date);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_closures_scope_room
+      ON closures (scope, room_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_closures_scope_floor
+      ON closures (scope, floor);
+    `);
+
     await client.query('COMMIT');
     console.log('✅ Migration completed successfully');
   } catch (err) {
