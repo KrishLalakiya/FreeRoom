@@ -459,4 +459,71 @@ describe('closures application and ranking in engine (C7)', () => {
   });
 });
 
+// ── No-Class Days for Holidays & Breaks (C12) ───────────────
+
+describe('no-class days for holidays and breaks (C12)', () => {
+  const terms = [
+    { id: 1, name: 'Term 5', start_date: '2026-08-01', end_date: '2026-10-28' },
+  ];
+  const room1A = { id: 101, building_id: 1, name: '1A', floor: '1st', parent_room_id: null };
+
+  it('on a no-class day, classes are skipped and room is free (C12)', () => {
+    // Scheduled class 10:00 to 12:00
+    const timetableClass = {
+      start: new Date('2026-09-15T04:30:00.000Z'), // 10:00 IST
+      end: new Date('2026-09-15T06:30:00.000Z'),   // 12:00 IST
+      title: 'MERN Stack',
+    };
+
+    // On normal day: room has 2 free intervals (before and after class)
+    const normalRes = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      timetableBlocks: [timetableClass],
+      noClassDay: false,
+    });
+    expect(normalRes.free_intervals).toHaveLength(2);
+
+    // On no-class day: timetable class does not run, room is free all day 06:00 to 22:00!
+    const holidayRes = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      timetableBlocks: [timetableClass],
+      noClassDay: { reason: 'Diwali' },
+    });
+    expect(holidayRes.status).toBe('free');
+    expect(holidayRes.free_intervals).toHaveLength(1);
+    expect(holidayRes.free_intervals[0].start).toEqual(new Date('2026-09-15T00:30:00.000Z')); // 06:00 IST
+    expect(holidayRes.free_intervals[0].end).toEqual(new Date('2026-09-15T16:30:00.000Z')); // 22:00 IST
+    expect(holidayRes.no_class_day.reason).toBe('Diwali');
+  });
+
+  it('if a closure also exists on a no-class day, the closure still takes effect (C12)', () => {
+    const examClosure = {
+      id: 9,
+      scope: 'room',
+      room_id: 101,
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      reason: 'Holiday Special Exam',
+    };
+
+    const res = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      timetableBlocks: [],
+      closures: [examClosure],
+      noClassDay: { reason: 'Mid-term Break' },
+    });
+
+    expect(res.status).toBe('closed');
+    expect(res.reason).toBe('Holiday Special Exam');
+    expect(res.free_intervals).toHaveLength(0);
+  });
+});
+
+
 

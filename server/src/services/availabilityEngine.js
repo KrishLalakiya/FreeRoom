@@ -176,24 +176,28 @@ export async function getRoomTimeline(roomId, date) {
   };
 }
 
-/**
- * Core availability computation for a single room on a given date.
- */
 async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now = null) {
-  let busyBlocks = await getTimetableOccurrences(room.id, dateStr, dayOfWeek);
   const childRooms = room.parent_room_id ? [] : await getChildRooms(room.id);
+  const noClassDay = await getNoClassDay(room.building_id, dateStr);
 
-  if (room.parent_room_id) {
-    const parentBlocks = await getTimetableOccurrences(room.parent_room_id, dateStr, dayOfWeek);
-    busyBlocks = [...busyBlocks, ...parentBlocks];
-  } else {
-    for (const child of childRooms) {
-      const childBlocks = await getTimetableOccurrences(child.id, dateStr, dayOfWeek);
-      busyBlocks = [...busyBlocks, ...childBlocks];
+  let busyBlocks = [];
+
+  // C12: On holidays and breaks, timetable classes do NOT run
+  if (!noClassDay) {
+    busyBlocks = await getTimetableOccurrences(room.id, dateStr, dayOfWeek);
+
+    if (room.parent_room_id) {
+      const parentBlocks = await getTimetableOccurrences(room.parent_room_id, dateStr, dayOfWeek);
+      busyBlocks = [...busyBlocks, ...parentBlocks];
+    } else {
+      for (const child of childRooms) {
+        const childBlocks = await getTimetableOccurrences(child.id, dateStr, dayOfWeek);
+        busyBlocks = [...busyBlocks, ...childBlocks];
+      }
     }
-  }
 
-  busyBlocks = await removeCancelledOccurrences(busyBlocks, dateStr);
+    busyBlocks = await removeCancelledOccurrences(busyBlocks, dateStr);
+  }
 
   const eventBlocks = await getEventOccurrences(room.id, dateStr);
   busyBlocks = [...busyBlocks, ...eventBlocks];
@@ -256,6 +260,7 @@ async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now =
   return {
     status,
     reason,
+    no_class_day: noClassDay ? { reason: noClassDay.reason } : null,
     free_until: freeUntil,
     busy_blocks: busyBlocks.map((b) => ({
       title: b.title,
@@ -536,6 +541,7 @@ export function applyClosuresToAvailability({
   terms = [],
   timetableBlocks = [],
   closures = [],
+  noClassDay = false,
   childRoomIds = [],
   parentRoomId = null,
   openingTime = '06:00',
@@ -553,6 +559,9 @@ export function applyClosuresToAvailability({
     };
   }
 
+  // C12: On no-class days, timetable classes do NOT run
+  const effectiveTimetable = noClassDay ? [] : timetableBlocks;
+
   const pRoomId = parentRoomId !== null ? parentRoomId : room.parent_room_id;
   const cRoomIds = childRoomIds.length > 0 ? childRoomIds : (room.childRoomIds || []);
 
@@ -567,7 +576,7 @@ export function applyClosuresToAvailability({
   const dayStart = zonedTimeToUtc(date, openingTime);
   const dayEnd = zonedTimeToUtc(date, closingTime);
 
-  const allBlocks = mergeOverlapping([...timetableBlocks, ...closureBlocks]);
+  const allBlocks = mergeOverlapping([...effectiveTimetable, ...closureBlocks]);
   const freeIntervals = computeFreeIntervals(allBlocks, dayStart, dayEnd);
 
   let status = 'free';
@@ -601,6 +610,7 @@ export function applyClosuresToAvailability({
   return {
     status,
     reason,
+    no_class_day: noClassDay ? (typeof noClassDay === 'object' ? noClassDay : { reason: 'Holiday' }) : null,
     free_until: freeUntil,
     free_intervals: freeIntervals,
     busy_blocks: allBlocks,
@@ -638,6 +648,19 @@ async function getClosureOccurrences(room, childRooms, dateStr, building) {
   return res.rows.map((c) =>
     closureToBusyBlock(c, dateStr, building.opening_time, building.closing_time)
   );
+}
+
+/**
+ * Fetch whether the given date is marked as a no-class day (C12).
+ */
+export async function getNoClassDay(buildingId, dateStr) {
+  const res = await query(
+    `SELECT * FROM no_class_days
+     WHERE (building_id IS NULL OR building_id = $1) AND date = $2
+     LIMIT 1`,
+    [buildingId, dateStr]
+  );
+  return res.rows[0] || null;
 }
 
 /**

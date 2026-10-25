@@ -84,6 +84,12 @@ export default function AdminPage() {
   const [closureNote, setClosureNote] = useState('');
   const [creatingClosure, setCreatingClosure] = useState(false);
 
+  // No-class days state (C12)
+  const [noClassDays, setNoClassDays] = useState([]);
+  const [newNoClassDate, setNewNoClassDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newNoClassReason, setNewNoClassReason] = useState('Holiday / Break');
+  const [savingNoClassDay, setSavingNoClassDay] = useState(false);
+
   useEffect(() => {
     if (!isAdmin) {
       toast.error('Admin privileges required');
@@ -97,13 +103,14 @@ export default function AdminPage() {
   const loadInitialData = async () => {
     setLoading(true);
     try {
-      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes, closuresRes] = await Promise.all([
+      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes, closuresRes, noClassRes] = await Promise.all([
         roomsAPI.list(1),
         adminAPI.getEvents(),
         adminAPI.getTimetable(),
         adminAPI.getRoomAliases(),
         adminAPI.getTerms(),
         adminAPI.getClosures(),
+        adminAPI.getNoClassDays(),
       ]);
 
       const rList = roomsRes.data.rooms || [];
@@ -118,6 +125,7 @@ export default function AdminPage() {
       setTimetable(timetableRes.data.entries || []);
       setAliases(aliasesRes.data.aliases || []);
       setClosures(closuresRes.data.closures || []);
+      setNoClassDays(noClassRes.data.noClassDays || []);
 
       const tList = termsRes.data.terms || [];
       setTerms(tList);
@@ -391,6 +399,42 @@ export default function AdminPage() {
     } catch (err) {
       console.error('Failed to delete closure:', err);
       toast.error('Failed to delete closure');
+    }
+  };
+
+  const handleCreateNoClassDay = async (e) => {
+    e.preventDefault();
+    if (!newNoClassDate) {
+      toast.error('Date is required');
+      return;
+    }
+    setSavingNoClassDay(true);
+    try {
+      await adminAPI.createNoClassDay({
+        date: newNoClassDate,
+        reason: newNoClassReason.trim() || 'Holiday',
+      });
+      toast.success('No-class day marked! Timetable classes will be skipped.');
+      setNewNoClassReason('Holiday / Break');
+      const res = await adminAPI.getNoClassDays();
+      setNoClassDays(res.data.noClassDays || []);
+    } catch (err) {
+      console.error('Failed to save no-class day:', err);
+      toast.error(err.response?.data?.message || 'Failed to save no-class day');
+    } finally {
+      setSavingNoClassDay(false);
+    }
+  };
+
+  const handleDeleteNoClassDay = async (id) => {
+    if (!window.confirm('Delete this no-class day? Regular timetable classes will resume.')) return;
+    try {
+      await adminAPI.deleteNoClassDay(id);
+      toast.success('No-class day removed');
+      setNoClassDays((prev) => prev.filter((d) => d.id !== id));
+    } catch (err) {
+      console.error('Failed to delete no-class day:', err);
+      toast.error('Failed to delete no-class day');
     }
   };
 
@@ -1361,6 +1405,92 @@ export default function AdminPage() {
                 </table>
               </div>
             )}
+          </div>
+
+          {/* No-Class Days (Holidays & Breaks — C12) Card */}
+          <div className="admin-card" style={{ gridColumn: '1 / -1', marginTop: 12 }}>
+            <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <HiOutlineBan size={20} style={{ color: 'var(--accent-warning, #f59e0b)' }} />
+              No-Class Days (Holidays & Breaks — C12)
+            </h2>
+            <p className="section-subtitle" style={{ marginBottom: 16 }}>
+              On marked holidays and breaks, recurring timetable classes do not run, leaving classrooms free for student study (unless closed by an exam closure).
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
+              <form onSubmit={handleCreateNoClassDay} style={{ background: 'var(--bg-card)', padding: 16, borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: 12 }}>Mark a No-Class Day</h3>
+                <div className="input-group">
+                  <label className="input-label">Date</label>
+                  <input
+                    type="date"
+                    className="input-field"
+                    value={newNoClassDate}
+                    onChange={(e) => setNewNoClassDate(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">Reason / Occasion</label>
+                  <input
+                    type="text"
+                    className="input-field"
+                    placeholder="e.g. Diwali / Mid-term Break"
+                    value={newNoClassReason}
+                    onChange={(e) => setNewNoClassReason(e.target.value)}
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-full"
+                  disabled={savingNoClassDay}
+                  style={{ marginTop: 8 }}
+                >
+                  {savingNoClassDay ? 'Saving...' : 'Mark as No-Class Day'}
+                </button>
+              </form>
+
+              <div>
+                <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: 12 }}>
+                  Marked No-Class Days ({noClassDays.length})
+                </h3>
+                {noClassDays.length === 0 ? (
+                  <div className="empty-state" style={{ padding: 24 }}>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>No holiday or break dates marked yet.</div>
+                  </div>
+                ) : (
+                  <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Occasion</th>
+                          <th>Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {noClassDays.map((d) => (
+                          <tr key={d.id}>
+                            <td style={{ fontWeight: 600 }}>{d.date}</td>
+                            <td>{d.reason}</td>
+                            <td>
+                              <button
+                                className="btn btn-danger btn-sm"
+                                onClick={() => handleDeleteNoClassDay(d.id)}
+                                title="Remove no-class day"
+                              >
+                                <HiOutlineTrash size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}

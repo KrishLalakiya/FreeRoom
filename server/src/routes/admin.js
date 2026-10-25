@@ -762,4 +762,63 @@ router.delete('/closures/:id', authenticate, requireAdmin, async (req, res) => {
   }
 });
 
+// ── No-Class Days (C12: Holidays and Breaks) ─────────────────
+
+/**
+ * GET /api/admin/no-class-days
+ */
+router.get('/no-class-days', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT n.*, u.name as creator_name
+      FROM no_class_days n
+      LEFT JOIN users u ON u.id = n.created_by
+      ORDER BY n.date ASC
+    `);
+    res.json({ noClassDays: result.rows });
+  } catch (err) {
+    console.error('Fetch no-class-days error:', err);
+    res.status(500).json({ error: 'Failed to fetch no-class days' });
+  }
+});
+
+/**
+ * POST /api/admin/no-class-days
+ */
+router.post('/no-class-days', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const { date, reason = 'Holiday', buildingId = 1 } = req.body;
+    if (!date || !isValidDateStr(date)) {
+      return res.status(400).json({ error: 'Invalid date', message: 'date must be in YYYY-MM-DD format.' });
+    }
+    const result = await query(`
+      INSERT INTO no_class_days (building_id, date, reason, created_by)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (building_id, date) DO UPDATE SET reason = EXCLUDED.reason
+      RETURNING *
+    `, [buildingId, date, reason.trim() || 'Holiday', req.user.id]);
+    res.status(201).json({ noClassDay: result.rows[0] });
+  } catch (err) {
+    console.error('Create no-class-day error:', err);
+    res.status(500).json({ error: 'Failed to save no-class day' });
+  }
+});
+
+/**
+ * DELETE /api/admin/no-class-days/:id
+ */
+router.delete('/no-class-days/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const result = await query('DELETE FROM no_class_days WHERE id = $1 RETURNING *', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'No-class day not found' });
+    }
+    res.json({ message: 'No-class day deleted', noClassDay: result.rows[0] });
+  } catch (err) {
+    console.error('Delete no-class-day error:', err);
+    res.status(500).json({ error: 'Failed to delete no-class day' });
+  }
+});
+
 export default router;

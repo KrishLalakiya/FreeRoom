@@ -289,6 +289,24 @@ async function migrate() {
       ON closures (scope, floor);
     `);
 
+    // ── No-class days (C12: holidays and breaks where classes do not run) ──
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS no_class_days (
+        id          SERIAL PRIMARY KEY,
+        building_id INTEGER REFERENCES buildings(id) ON DELETE CASCADE,
+        date        DATE NOT NULL,
+        reason      VARCHAR(255) NOT NULL DEFAULT 'Holiday',
+        created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(building_id, date)
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_no_class_days_date
+      ON no_class_days (date);
+    `);
+
     await client.query('COMMIT');
     console.log('✅ Migration completed successfully');
   } catch (err) {

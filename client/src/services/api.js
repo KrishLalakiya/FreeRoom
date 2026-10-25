@@ -106,6 +106,15 @@ export const adminAPI = {
 
   deleteClosure: (closureId) =>
     api.delete(`/admin/closures/${closureId}`),
+
+  getNoClassDays: () =>
+    api.get('/admin/no-class-days'),
+
+  createNoClassDay: (data) =>
+    api.post('/admin/no-class-days', data),
+
+  deleteNoClassDay: (id) =>
+    api.delete(`/admin/no-class-days/${id}`),
 };
 
 export default api;
