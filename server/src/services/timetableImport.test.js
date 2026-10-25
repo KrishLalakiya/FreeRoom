@@ -40,22 +40,35 @@ function buildWorkbookBuffer() {
 }
 
 describe('parseClassCell', () => {
-  it('extracts course, group, teacher and room', () => {
+  it('extracts course, group, teacher, room, subject and entryType', () => {
     expect(parseClassCell('MERN - 2029, Grp A, (Mrinal), Classroom A 1st floor')).toEqual({
       course: 'MERN - 2029',
+      subject: 'MERN',
       group: 'A',
+      groups: ['A'],
       teacher: 'Mrinal',
       roomName: 'Classroom A 1st floor',
+      entryType: 'class',
     });
   });
 
-  it('handles a cell without a teacher', () => {
+  it('handles a cell without a teacher and marks clubs', () => {
     expect(parseClassCell('Academic Clubs, C groundfloor')).toEqual({
       course: 'Academic Clubs',
+      subject: 'Academic Clubs',
       group: null,
+      groups: [],
       teacher: null,
       roomName: 'C groundfloor',
+      entryType: 'club',
     });
+  });
+
+  it('detects lab entry type from LAB marker', () => {
+    const res = parseClassCell('MERN - 2029\nGrp A LAB\n(Mrinal)\nClass A 1st floor');
+    expect(res.entryType).toBe('lab');
+    expect(res.subject).toBe('MERN');
+    expect(res.groups).toEqual(['A']);
   });
 
   it('returns null for lunch and empty cells', () => {

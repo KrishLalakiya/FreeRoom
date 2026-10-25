@@ -80,28 +80,109 @@ export function minutesToTime(minutes) {
 
 /**
  * Parse a class cell such as
- * "MERN - 2029, Grp A, (Mrinal), Classroom A 1st floor".
+ * "MERN - 2029, Grp A, (Mrinal), Classroom A 1st floor" or multi-line cell.
+ * Extracts course, subject, group(s), teacher, roomName, and entryType ('class', 'lab', 'club').
  * Returns null when the text is not usable.
  */
 export function parseClassCell(raw) {
   if (raw === null || raw === undefined) return null;
   if (typeof raw !== 'string') return null;
 
-  const text = raw.replace(/\s+/g, ' ').trim();
-  if (!text || isIgnoredCell(text)) return null;
+  const rawTrimmed = raw.trim();
+  if (!rawTrimmed || isIgnoredCell(rawTrimmed)) return null;
 
-  let teacher = null;
-  const teacherMatch = text.match(/\(([^)]*)\)/);
-  if (teacherMatch) {
-    teacher = teacherMatch[1].trim() || null;
+  // Standalone lab cell
+  if (/^lab$/i.test(rawTrimmed)) {
+    return {
+      isLabOnly: true,
+      course: 'Lab',
+      subject: 'Lab',
+      group: null,
+      groups: [],
+      teacher: null,
+      roomName: null,
+      entryType: 'lab',
+    };
   }
 
-  let rest = text.replace(/\([^)]*\)/g, ' ');
+  const isClub = /academic clubs/i.test(rawTrimmed);
+  const isLab = /\blab\b/i.test(rawTrimmed);
 
-  let group = null;
-  const groupMatch = rest.match(/\b(?:group|grp)\.?\s*[:\-]?\s*([a-z0-9]+)\b/i);
+  const lines = rawTrimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  let teacher = null;
+  let roomName = null;
+  const groups = [];
+
+  // Check for room inside parentheses e.g. 'FDE (Classroom A, 2nd Floor)'
+  const parenMatch = rawTrimmed.match(/\(([^)]*)\)/);
+  if (parenMatch) {
+    const inside = parenMatch[1].trim();
+    if (/(classroom|class|floor|ground)/i.test(inside)) {
+      roomName = inside;
+    } else {
+      teacher = inside || null;
+    }
+  }
+
+  if (lines.length > 1) {
+    const remainingLines = [];
+    for (const line of lines) {
+      const tMatch = line.match(/^\(([^)]+)\)$/);
+      if (tMatch && !/(classroom|class|floor|ground)/i.test(tMatch[1])) {
+        teacher = tMatch[1].trim();
+        continue;
+      }
+
+      if (!roomName && /(classroom|class\s+[a-c]|c\s*groundfloor|ground\s*floor|[12][a-c]\b)/i.test(line)) {
+        roomName = line.trim();
+        continue;
+      }
+
+      const grpMatch = line.match(/\b(?:group|grp)\.?\s*[:\-]?\s*([a-z0-9]+(?:\s*\+\s*[a-z0-9]+)*)\b/i);
+      if (grpMatch) {
+        const parts = grpMatch[1].split('+').map((g) => g.trim().toUpperCase());
+        groups.push(...parts);
+        continue;
+      }
+
+      if (/^\[.*\]$/.test(line)) {
+        continue;
+      }
+
+      remainingLines.push(line);
+    }
+
+    let courseStr = remainingLines.join(' ');
+    courseStr = courseStr.replace(/\([^)]*\)/g, ' ');
+    const cleanSubject = courseStr
+      .replace(/\s*-\s*202[0-9]\b/g, '')
+      .replace(/\bLAB\b/gi, '')
+      .replace(/\[[^\]]*\]/g, '')
+      .replace(/\b(?:group|grp)\.?\s*[:\-]?\s*([a-z0-9]+(?:\s*\+\s*[a-z0-9]+)*)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const cleanCourse = courseStr.replace(/\s+/g, ' ').trim();
+
+    return {
+      course: cleanCourse || cleanSubject || rawTrimmed,
+      subject: cleanSubject || (isClub ? 'Academic Clubs' : cleanCourse),
+      group: groups[0] || null,
+      groups: [...new Set(groups)],
+      teacher,
+      roomName,
+      entryType: isClub ? 'club' : (isLab ? 'lab' : 'class'),
+    };
+  }
+
+  // Single-line format (e.g. comma-separated)
+  let rest = rawTrimmed.replace(/\([^)]*\)/g, ' ');
+
+  const groupMatch = rest.match(/\b(?:group|grp)\.?\s*[:\-]?\s*([a-z0-9]+(?:\s*\+\s*[a-z0-9]+)*)\b/i);
   if (groupMatch) {
-    group = groupMatch[1].toUpperCase();
+    const parts = groupMatch[1].split('+').map((g) => g.trim().toUpperCase());
+    groups.push(...parts);
     rest = rest.replace(groupMatch[0], ' ');
   }
 
@@ -112,8 +193,7 @@ export function parseClassCell(raw) {
 
   if (parts.length === 0) return null;
 
-  let roomName = null;
-  if (parts.length >= 2) {
+  if (parts.length >= 2 && !roomName) {
     roomName = parts.pop();
   }
 
@@ -122,13 +202,23 @@ export function parseClassCell(raw) {
     .replace(/[\s,;:-]+$/, '')
     .trim();
 
+  const cleanSubject = course
+    .replace(/\s*-\s*202[0-9]\b/g, '')
+    .replace(/\bLAB\b/gi, '')
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
   if (!course && !roomName) return null;
 
   return {
-    course: course || text,
-    group,
+    course: course || rawTrimmed,
+    subject: cleanSubject || (isClub ? 'Academic Clubs' : course),
+    group: groups[0] || null,
+    groups: [...new Set(groups)],
     teacher,
     roomName,
+    entryType: isClub ? 'club' : (isLab ? 'lab' : 'class'),
   };
 }
 
@@ -396,9 +486,12 @@ export function parseTimetableWorkbook(buffer) {
           startTime: minutesToTime(startMinutes),
           endTime: minutesToTime(endMinutes),
           course: parsed.course,
+          subject: parsed.subject || parsed.course,
           teacher: parsed.teacher,
           group: parsed.group || section.group,
+          groups: (parsed.groups && parsed.groups.length > 0) ? parsed.groups : (section.group ? [section.group] : []),
           roomName: parsed.roomName,
+          entryType: parsed.entryType || 'class',
           raw: String(value),
         });
       }
@@ -572,8 +665,11 @@ export async function importTimetable({
       accepted.push({
         ...candidate,
         course_name: cls.course,
+        subject_name: cls.subject,
         teacher_name: cls.teacher,
         group_name: cls.group,
+        groups: cls.groups || (cls.group ? [cls.group] : []),
+        entry_type: cls.entryType || 'class',
         sheetRow: cls.sheetRow,
       });
     }
@@ -592,25 +688,115 @@ export async function importTimetable({
       };
     }
 
+    let batchId = null;
+    if (termId) {
+      const termRes = await client.query('SELECT batch_id FROM terms WHERE id = $1', [termId]);
+      if (termRes.rows.length > 0) {
+        batchId = termRes.rows[0].batch_id;
+      }
+    }
+
     let savedCount = 0;
+    const subjectCache = new Map();
+    const instructorCache = new Map();
+    const groupCache = new Map();
+
+    const getSubjectId = async (name) => {
+      const trimmed = (name || '').trim();
+      if (!trimmed) return null;
+      const key = trimmed.toLowerCase();
+      if (subjectCache.has(key)) return subjectCache.get(key);
+      const res = await client.query(`
+        INSERT INTO subjects (name, short_code)
+        VALUES ($1, $1)
+        ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+      `, [trimmed]);
+      const id = res.rows[0].id;
+      subjectCache.set(key, id);
+      return id;
+    };
+
+    const getInstructorId = async (name) => {
+      const trimmed = (name || '').trim();
+      if (!trimmed) return null;
+      const key = trimmed.toLowerCase();
+      if (instructorCache.has(key)) return instructorCache.get(key);
+      const res = await client.query(`
+        INSERT INTO instructors (name)
+        VALUES ($1)
+        ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+      `, [trimmed]);
+      const id = res.rows[0].id;
+      instructorCache.set(key, id);
+      return id;
+    };
+
+    const getGroupId = async (bId, name) => {
+      if (!bId) return null;
+      const trimmed = (name || '').trim().toUpperCase();
+      if (!trimmed) return null;
+      const key = `${bId}:${trimmed}`;
+      if (groupCache.has(key)) return groupCache.get(key);
+      const res = await client.query(`
+        INSERT INTO groups (batch_id, name)
+        VALUES ($1, $2)
+        ON CONFLICT (batch_id, name) DO UPDATE SET name = EXCLUDED.name
+        RETURNING id
+      `, [bId, trimmed]);
+      const id = res.rows[0].id;
+      groupCache.set(key, id);
+      return id;
+    };
+
     for (const row of accepted) {
-      await client.query(
+      const subjectId = await getSubjectId(row.subject_name || row.course_name);
+      const instructorId = await getInstructorId(row.teacher_name);
+
+      const groupIds = [];
+      if (batchId && Array.isArray(row.groups) && row.groups.length > 0) {
+        for (const gName of row.groups) {
+          const gId = await getGroupId(batchId, gName);
+          if (gId && !groupIds.includes(gId)) groupIds.push(gId);
+        }
+      } else if (batchId && row.group_name) {
+        const gId = await getGroupId(batchId, row.group_name);
+        if (gId) groupIds.push(gId);
+      }
+
+      const insertRes = await client.query(
         `INSERT INTO timetable_entries
-           (room_id, term_id, course_name, teacher, group_name, day_of_week, start_time, end_time, valid_from, valid_to)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+           (room_id, term_id, subject_id, instructor_id, entry_type, day_of_week, start_time, end_time,
+            course_name, teacher, group_name, valid_from, valid_to)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         RETURNING id`,
         [
           row.room_id,
           termId,
-          row.course_name,
-          row.teacher_name,
-          row.group_name,
+          subjectId,
+          instructorId,
+          row.entry_type || 'class',
           row.day_of_week,
           row.start,
           row.end,
+          row.course_name,
+          row.teacher_name,
+          row.group_name,
           validFrom,
           validTo,
         ]
       );
+
+      const entryId = insertRes.rows[0].id;
+      for (const gId of groupIds) {
+        await client.query(
+          `INSERT INTO timetable_entry_groups (timetable_entry_id, group_id)
+           VALUES ($1, $2)
+           ON CONFLICT DO NOTHING`,
+          [entryId, gId]
+        );
+      }
       savedCount += 1;
     }
 
