@@ -688,6 +688,8 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
 
     let batchId = null;
     let batchYearResolved = null;
+    let termStart = null;
+    let termEnd = null;
     if (termId) {
       const termRes = await client.query(
         `SELECT t.batch_id, b.year as batch_year, t.start_date, t.end_date
@@ -699,8 +701,32 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
       if (termRes.rows.length > 0) {
         batchId = termRes.rows[0].batch_id;
         batchYearResolved = termRes.rows[0].batch_year;
-        if (!validFrom) validFrom = termRes.rows[0].start_date;
-        if (!validTo) validTo = termRes.rows[0].end_date;
+        termStart = termRes.rows[0].start_date instanceof Date
+          ? termRes.rows[0].start_date.toISOString().slice(0, 10)
+          : String(termRes.rows[0].start_date).slice(0, 10);
+        termEnd = termRes.rows[0].end_date instanceof Date
+          ? termRes.rows[0].end_date.toISOString().slice(0, 10)
+          : String(termRes.rows[0].end_date).slice(0, 10);
+
+        if (validFrom && (validFrom < termStart || validFrom > termEnd)) {
+          errors.push({
+            sheetRow: 0,
+            column: 'validFrom',
+            value: validFrom,
+            reason: `Timetable start date (${validFrom}) is outside term dates (${termStart} to ${termEnd}).`,
+          });
+        }
+        if (validTo && (validTo > termEnd || validTo < termStart)) {
+          errors.push({
+            sheetRow: 0,
+            column: 'validTo',
+            value: validTo,
+            reason: `Timetable end date (${validTo}) is outside term dates (${termStart} to ${termEnd}).`,
+          });
+        }
+
+        if (!validFrom) validFrom = termStart;
+        if (!validTo) validTo = termEnd;
       }
     }
 
@@ -738,6 +764,17 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
     let duplicates = 0;
 
     for (const cls of parsed.classes) {
+      // C11: A timetable row outside its term's dates is rejected with a row error
+      if (cls.date && termStart && termEnd && (cls.date < termStart || cls.date > termEnd)) {
+        errors.push({
+          sheetRow: cls.sheetRow,
+          dayOfWeek: cls.dayOfWeek,
+          value: cls.raw,
+          reason: `Class date (${cls.date}) is outside term dates (${termStart} to ${termEnd}).`,
+        });
+        continue;
+      }
+
       if (!cls.roomName) {
         errors.push({
           sheetRow: cls.sheetRow,
