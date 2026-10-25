@@ -409,6 +409,7 @@ router.post('/timetable/import', authenticate, requireAdmin, upload.single('file
 
     const report = await importTimetable({
       buffer: req.file.buffer,
+      filename: req.file.originalname,
       buildingId,
       termId,
       validFrom,

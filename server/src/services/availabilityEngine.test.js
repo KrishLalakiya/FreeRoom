@@ -602,5 +602,42 @@ describe('student UI closure behavior (C9)', () => {
   });
 });
 
+// ── Enriched Room Timeline Details (C19) ───────────────────
+
+describe('enriched room timeline details (C19)', () => {
+  it('preserves subject_name, instructor_name, groups_list, and provenance', () => {
+    const rawClassBlock = {
+      title: 'MERN Stack',
+      subject_name: 'MERN Stack',
+      teacher: 'Dr. Sharma',
+      instructor_name: 'Dr. Sharma',
+      group: 'Grp A, Grp B',
+      groups_list: ['Grp A', 'Grp B'],
+      entry_type: 'lab',
+      batch_year: 2029,
+      batch_name: 'Batch 2029',
+      batch_term_label: 'Batch 2029 (Term 5)',
+      provenance: {
+        raw_cell: 'MERN - 2029\nGrp A\n(Dr. Sharma)\nClassroom A',
+        sheet_name: 'Weekly Schedule',
+        sheet_row: 7,
+        sheet_col: 3,
+        cell_coord: 'Row 7, Col 3',
+        source_file: 'SST 2029 Batch Term 5 Syllabus.xlsx',
+        imported_at: new Date('2026-08-01T00:00:00Z'),
+      },
+      start: utc('10:00'),
+      end: utc('12:00'),
+    };
+
+    expect(rawClassBlock.subject_name).toBe('MERN Stack');
+    expect(rawClassBlock.instructor_name).toBe('Dr. Sharma');
+    expect(rawClassBlock.groups_list).toEqual(['Grp A', 'Grp B']);
+    expect(rawClassBlock.batch_term_label).toBe('Batch 2029 (Term 5)');
+    expect(rawClassBlock.entry_type).toBe('lab');
+    expect(rawClassBlock.provenance.cell_coord).toBe('Row 7, Col 3');
+  });
+});
+
 
 

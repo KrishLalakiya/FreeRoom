@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import XLSX from 'xlsx';
 import { getClient } from '../config/db.js';
 
@@ -563,7 +564,11 @@ function timetableKey(row) {
 export async function importTimetable(fileOrOptions, maybeOptions = {}) {
   let options = {};
   if (Buffer.isBuffer(fileOrOptions) || typeof fileOrOptions === 'string') {
-    options = { buffer: fileOrOptions, ...maybeOptions };
+    options = {
+      buffer: fileOrOptions,
+      filename: typeof fileOrOptions === 'string' ? path.basename(fileOrOptions) : null,
+      ...maybeOptions,
+    };
   } else if (fileOrOptions && typeof fileOrOptions === 'object') {
     options = { ...fileOrOptions, ...maybeOptions };
   }
@@ -856,6 +861,11 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
         groups: cls.groups || (cls.group ? [cls.group] : []),
         entry_type: cls.entryType || 'class',
         sheetRow: cls.sheetRow,
+        raw_cell: cls.raw || null,
+        sheet_name: parsed.sheetName || null,
+        sheet_row: cls.sheetRow || null,
+        sheet_col: cls.column || null,
+        source_file: options.filename || options.sourceFilename || null,
       });
     }
 
@@ -946,8 +956,9 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
       const insertRes = await client.query(
         `INSERT INTO timetable_entries
            (room_id, term_id, subject_id, instructor_id, entry_type, day_of_week, start_time, end_time,
-            course_name, teacher, group_name, valid_from, valid_to)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            course_name, teacher, group_name, valid_from, valid_to,
+            raw_cell, sheet_name, sheet_row, sheet_col, source_file)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
          RETURNING id`,
         [
           row.room_id,
@@ -963,6 +974,11 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
           row.group_name,
           validFrom,
           validTo,
+          row.raw_cell,
+          row.sheet_name,
+          row.sheet_row,
+          row.sheet_col,
+          row.source_file,
         ]
       );
 

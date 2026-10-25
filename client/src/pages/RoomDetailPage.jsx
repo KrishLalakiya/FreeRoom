@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { roomsAPI, reportsAPI } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
 import {
   HiOutlineArrowLeft,
@@ -33,13 +34,29 @@ function formatDate(dateStr) {
   });
 }
 
+function renderTypeBadge(entryType) {
+  const type = (entryType || 'class').toLowerCase();
+  if (type === 'lab') {
+    return <span className="room-card-badge badge-lab">🔬 Lab</span>;
+  }
+  if (type === 'club') {
+    return <span className="room-card-badge badge-club">🎯 Club</span>;
+  }
+  if (type === 'tutorial') {
+    return <span className="room-card-badge badge-tutorial">📝 Tutorial</span>;
+  }
+  return <span className="room-card-badge badge-lecture">📚 Lecture</span>;
+}
+
 export default function RoomDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
   const [timeline, setTimeline] = useState(null);
   const [loading, setLoading] = useState(true);
   const [reporting, setReporting] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedProvenance, setSelectedProvenance] = useState(null);
 
   useEffect(() => {
     fetchTimeline();
@@ -411,11 +428,33 @@ export default function RoomDetailPage() {
                     {formatTime(item.start)} — {formatTime(item.end)}
                   </div>
                   <div className="timeline-title">
-                    {item.is_closure
-                      ? `🚫 ${item.reason || 'Exam'} (Room Closed)`
-                      : item.type === 'free'
-                      ? '🟢 Available for Study'
-                      : item.title || 'Occupied Block'}
+                    {item.is_closure ? (
+                      `🚫 ${item.reason || 'Exam'} (Room Closed)`
+                    ) : item.type === 'free' ? (
+                      '🟢 Available for Study'
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                        {renderTypeBadge(item.entry_type)}
+                        <span>{item.subject_name || item.title || 'Class'}</span>
+                        {isAdmin && item.provenance?.raw_cell && (
+                          <button
+                            className="admin-inspect-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedProvenance({
+                                ...item.provenance,
+                                subject: item.subject_name || item.title,
+                                time: `${formatTime(item.start)} — ${formatTime(item.end)}`,
+                                roomName: timeline.name,
+                              });
+                            }}
+                            title="Inspect raw cell import provenance"
+                          >
+                            🔍 Provenance
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                   {item.type === 'free' && (
                     <div className="timeline-subtitle" style={{ color: 'var(--accent-success)' }}>
@@ -428,10 +467,28 @@ export default function RoomDetailPage() {
                     </div>
                   )}
                   {!item.is_closure && item.type !== 'free' && (
-                    <div className="timeline-subtitle">
-                      {item.teacher ? `Instructor: ${item.teacher}` : 'Class / Campus Event'}
-                      {item.group ? ` · ${item.group}` : ''}
-                    </div>
+                    <>
+                      <div className="timeline-subtitle" style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+                        <span>
+                          <strong>Instructor:</strong> {item.instructor_name || item.teacher || 'TBD'}
+                        </span>
+                        {item.batch_term_label && (
+                          <span>
+                            <strong>Cohort:</strong> {item.batch_term_label}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Groups:</span>
+                        {item.groups_list && item.groups_list.length > 0 ? (
+                          item.groups_list.map((g) => (
+                            <span key={g} className="group-pill">{g}</span>
+                          ))
+                        ) : (
+                          <span className="group-pill">{item.group || 'All'}</span>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
               ))}
@@ -444,6 +501,68 @@ export default function RoomDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Admin Provenance Modal (C19) */}
+      {selectedProvenance && (
+        <div className="modal-overlay" onClick={() => setSelectedProvenance(null)}>
+          <div className="modal-card fade-in" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">
+                🔍 Timetable Cell Provenance
+              </div>
+              <button
+                className="modal-close-btn"
+                onClick={() => setSelectedProvenance(null)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="provenance-grid">
+              <div className="provenance-field">
+                <div className="provenance-label">Source Spreadsheet</div>
+                <div className="provenance-value">{selectedProvenance.source_file || 'Excel File'}</div>
+              </div>
+              <div className="provenance-field">
+                <div className="provenance-label">Sheet Name</div>
+                <div className="provenance-value">{selectedProvenance.sheet_name || 'Schedule'}</div>
+              </div>
+              <div className="provenance-field">
+                <div className="provenance-label">Cell Coordinate</div>
+                <div className="provenance-value">{selectedProvenance.cell_coord || 'N/A'}</div>
+              </div>
+              <div className="provenance-field">
+                <div className="provenance-label">Imported At</div>
+                <div className="provenance-value">
+                  {selectedProvenance.imported_at
+                    ? new Date(selectedProvenance.imported_at).toLocaleString('en-IN')
+                    : 'Initial Batch Seed'}
+                </div>
+              </div>
+            </div>
+
+            <div className="provenance-field">
+              <div className="provenance-label">Class Details</div>
+              <div className="provenance-value" style={{ marginBottom: 12 }}>
+                {selectedProvenance.subject} · {selectedProvenance.time} (Room {selectedProvenance.roomName})
+              </div>
+            </div>
+
+            <div className="provenance-field">
+              <div className="provenance-label">Raw Cell Content from Excel</div>
+              <pre className="provenance-raw">
+                {selectedProvenance.raw_cell || 'No raw text recorded'}
+              </pre>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+              <button className="btn btn-secondary" onClick={() => setSelectedProvenance(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -461,12 +580,20 @@ function buildTimelineItems(timeline) {
         start: block.start,
         end: block.end,
         title: block.title,
+        subject_name: block.subject_name || block.title,
         teacher: block.teacher,
+        instructor_name: block.instructor_name || block.teacher,
         group: block.group,
+        groups_list: block.groups_list || (block.group ? [block.group] : []),
+        entry_type: block.entry_type || (block.is_closure ? 'closure' : 'class'),
+        batch_year: block.batch_year || null,
+        batch_name: block.batch_name || null,
+        batch_term_label: block.batch_term_label || null,
         is_closure: !!block.is_closure,
         reason: block.reason || null,
         scope: block.scope || null,
         note: block.note || null,
+        provenance: block.provenance || null,
       });
     }
   }

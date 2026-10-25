@@ -380,8 +380,16 @@ async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now =
     free_until: freeUntil,
     busy_blocks: busyBlocks.map((b) => ({
       title: b.title,
+      subject_name: b.subject_name || b.title,
       teacher: b.teacher,
+      instructor_name: b.instructor_name || b.teacher,
       group: b.group,
+      groups_list: b.groups_list || (b.group ? [b.group] : []),
+      entry_type: b.entry_type || (b.isClosure ? 'closure' : 'class'),
+      batch_year: b.batch_year || null,
+      batch_name: b.batch_name || null,
+      batch_term_label: b.batch_term_label || null,
+      provenance: b.provenance || null,
       start: b.start,
       end: b.end,
       is_closure: !!b.isClosure,
@@ -408,17 +416,33 @@ async function getTimetableOccurrences(roomId, dateStr, dayOfWeek) {
       te.entry_type,
       te.start_time,
       te.end_time,
+      te.raw_cell,
+      te.sheet_name,
+      te.sheet_row,
+      te.sheet_col,
+      te.source_file,
+      te.created_at,
       -- v2 linked fields
       s.name          AS subject_name,
       i.name          AS instructor_name,
+      b.year          AS batch_year,
+      t.semester_number,
+      t.term_number,
       -- legacy fallbacks
       te.course_name,
       te.teacher,
-      te.group_name
+      te.group_name,
+      COALESCE(
+        ARRAY_AGG(g.name ORDER BY g.name) FILTER (WHERE g.name IS NOT NULL),
+        ARRAY[]::text[]
+      ) AS groups_list
     FROM timetable_entries te
-    LEFT JOIN terms       t ON t.id = te.term_id
-    LEFT JOIN subjects    s ON s.id = te.subject_id
-    LEFT JOIN instructors i ON i.id = te.instructor_id
+    LEFT JOIN terms                  t  ON t.id = te.term_id
+    LEFT JOIN batches                b  ON b.id = t.batch_id
+    LEFT JOIN subjects               s  ON s.id = te.subject_id
+    LEFT JOIN instructors            i  ON i.id = te.instructor_id
+    LEFT JOIN timetable_entry_groups teg ON teg.timetable_entry_id = te.id
+    LEFT JOIN groups                 g  ON g.id = teg.group_id
     WHERE te.room_id    = $1
       AND te.day_of_week = $2
       AND (
@@ -428,20 +452,53 @@ async function getTimetableOccurrences(roomId, dateStr, dayOfWeek) {
         -- legacy entries without a term: use old valid_from/valid_to
         (te.term_id IS NULL AND te.valid_from <= $3 AND te.valid_to >= $3)
       )
+    GROUP BY
+      te.id, s.name, i.name, b.year, t.semester_number, t.term_number
   `,
     [roomId, dayOfWeek, dateStr]
   );
 
-  return res.rows.map((entry) => ({
-    timetable_entry_id: entry.id,
-    title: entry.subject_name || entry.course_name,
-    teacher: entry.instructor_name || entry.teacher,
-    group: entry.group_name,
-    entry_type: entry.entry_type || 'class',
-    start: zonedTimeToUtc(dateStr, entry.start_time),
-    end: zonedTimeToUtc(dateStr, entry.end_time),
-    type: 'class',
-  }));
+  return res.rows.map((entry) => {
+    const rawGroups = entry.groups_list && entry.groups_list.length > 0
+      ? entry.groups_list
+      : entry.group_name
+      ? [entry.group_name]
+      : [];
+
+    const subjectName = entry.subject_name || entry.course_name;
+    const instructorName = entry.instructor_name || entry.teacher;
+    const batchLabel = entry.batch_year
+      ? `Batch ${entry.batch_year}${entry.term_number ? ` (Term ${entry.term_number})` : ''}`
+      : null;
+
+    return {
+      timetable_entry_id: entry.id,
+      title: subjectName,
+      subject_name: subjectName,
+      teacher: instructorName,
+      instructor_name: instructorName,
+      group: rawGroups.length > 0 ? rawGroups.join(', ') : (entry.group_name || 'All'),
+      groups_list: rawGroups,
+      entry_type: entry.entry_type || 'class',
+      batch_year: entry.batch_year || null,
+      batch_name: entry.batch_year ? `Batch ${entry.batch_year}` : null,
+      semester_number: entry.semester_number || null,
+      term_number: entry.term_number || null,
+      batch_term_label: batchLabel,
+      provenance: {
+        raw_cell: entry.raw_cell || null,
+        sheet_name: entry.sheet_name || null,
+        sheet_row: entry.sheet_row || null,
+        sheet_col: entry.sheet_col || null,
+        cell_coord: entry.sheet_row && entry.sheet_col ? `Row ${entry.sheet_row}, Col ${entry.sheet_col}` : null,
+        source_file: entry.source_file || null,
+        imported_at: entry.created_at || null,
+      },
+      start: zonedTimeToUtc(dateStr, entry.start_time),
+      end: zonedTimeToUtc(dateStr, entry.end_time),
+      type: 'class',
+    };
+  });
 }
 
 /**

@@ -162,6 +162,11 @@ async function migrate() {
         ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL;
         ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS instructor_id INTEGER REFERENCES instructors(id) ON DELETE SET NULL;
         ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS entry_type VARCHAR(20) NOT NULL DEFAULT 'class';
+        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS raw_cell TEXT;
+        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS sheet_name VARCHAR(255);
+        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS sheet_row INTEGER;
+        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS sheet_col INTEGER;
+        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS source_file VARCHAR(255);
       EXCEPTION WHEN others THEN NULL;
       END $$;
     `);
