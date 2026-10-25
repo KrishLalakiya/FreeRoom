@@ -46,7 +46,7 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
   // C2: holidays no longer close rooms; removed isClosedDay check
 
   if (!(await hasTimetableForDate(buildingId, dateStr))) {
-    return { status: 'unknown', reason: 'outside_timetable_coverage', rooms: [], coverage };
+    return { status: 'unknown', reason: 'Outside academic term: no timetable data', rooms: [], coverage };
   }
 
   const results = [];
@@ -96,7 +96,7 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
   // C2: holidays no longer close rooms; removed isClosedDay check
 
   if (!(await hasTimetableForDate(buildingId, date))) {
-    return { status: 'unknown', reason: 'outside_timetable_coverage', rooms: [], coverage };
+    return { status: 'unknown', reason: 'Outside academic term: no timetable data', rooms: [], coverage };
   }
 
   const windowStart = zonedTimeToUtc(date, startTime);
@@ -150,7 +150,7 @@ export async function getRoomTimeline(roomId, date) {
   // C2: holidays no longer close rooms; removed isClosedDay check
 
   if (!(await hasTimetableForDate(room.building_id, date))) {
-    return { ...base, status: 'unknown' };
+    return { ...base, status: 'unknown', reason: 'Outside academic term: no timetable data' };
   }
 
   const isToday = date === toDateStr();
@@ -396,28 +396,99 @@ export function computeFreeIntervals(busyBlocks, dayStart, dayEnd) {
 }
 
 /**
- * Whether the given date falls inside any term for rooms in this building,
- * OR inside any legacy timetable entry's valid_from/valid_to range.
- * A date with no coverage is "unknown", never "free" (C3/C5).
+ * Check whether a date string falls inside any term in a list of terms (C5).
  */
-async function hasTimetableForDate(buildingId, dateStr) {
-  const res = await query(
-    `
-    SELECT 1
-    FROM timetable_entries te
-    JOIN rooms r ON r.id = te.room_id
-    LEFT JOIN terms t ON t.id = te.term_id
-    WHERE r.building_id = $1
-      AND (
-        (te.term_id IS NOT NULL AND t.start_date <= $2 AND t.end_date >= $2)
-        OR
-        (te.term_id IS NULL AND te.valid_from <= $2 AND te.valid_to >= $2)
-      )
-    LIMIT 1
-  `,
+export function isDateInsideAnyTerm(dateStr, terms = []) {
+  if (!Array.isArray(terms) || terms.length === 0) return false;
+  return terms.some((term) => {
+    const s = typeof term.start_date === 'string' ? term.start_date : toDateStr(term.start_date);
+    const e = typeof term.end_date === 'string' ? term.end_date : toDateStr(term.end_date);
+    return s <= dateStr && e >= dateStr;
+  });
+}
+
+/**
+ * Pure evaluation function for availability on a date given terms and busy blocks (C5).
+ * Used for unit testing the C5 engine rule without database dependencies.
+ */
+export function evaluateDateAvailability({
+  date,
+  terms = [],
+  busyBlocks = [],
+  dayStart = '06:00',
+  dayEnd = '22:00',
+  now = null,
+}) {
+  if (!isDateInsideAnyTerm(date, terms)) {
+    return {
+      status: 'unknown',
+      reason: 'Outside academic term: no timetable data',
+      free_until: null,
+      free_intervals: [],
+      busy_blocks: [],
+    };
+  }
+
+  const startUtc = typeof dayStart === 'string' ? zonedTimeToUtc(date, dayStart) : dayStart;
+  const endUtc = typeof dayEnd === 'string' ? zonedTimeToUtc(date, dayEnd) : dayEnd;
+  const freeIntervals = computeFreeIntervals(busyBlocks, startUtc, endUtc);
+
+  let status = 'free';
+  let freeUntil = null;
+
+  if (now) {
+    const currentFree = freeIntervals.find(
+      (interval) => interval.start <= now && interval.end > now
+    );
+    if (currentFree) {
+      status = 'free';
+      freeUntil = currentFree.end;
+    } else {
+      status = 'busy';
+    }
+  } else {
+    status = freeIntervals.length > 0 ? 'free' : 'busy';
+  }
+
+  return {
+    status,
+    free_until: freeUntil,
+    free_intervals: freeIntervals,
+    busy_blocks: busyBlocks,
+  };
+}
+
+/**
+ * Whether the given date falls inside any term for rooms in this building,
+ * OR inside any legacy timetable entry's valid_from/valid_to range (C5).
+ * When a query date does NOT fall within ANY term (SELECT id FROM terms WHERE start_date <= date AND end_date >= date):
+ * do NOT assume rooms are free. Return status = "unknown" (reason = "Outside academic term: no timetable data").
+ */
+export async function hasTimetableForDate(buildingId, dateStr, terms = null) {
+  if (Array.isArray(terms)) {
+    return isDateInsideAnyTerm(dateStr, terms);
+  }
+
+  // Check if date falls within ANY term (C5)
+  const termRes = await query(
+    `SELECT id FROM terms WHERE start_date <= $1 AND end_date >= $1 LIMIT 1`,
+    [dateStr]
+  );
+  if (termRes.rows.length > 0) return true;
+
+  // Fallback for legacy timetable entries with valid_from/valid_to
+  const legacyRes = await query(
+    `SELECT te.id
+     FROM timetable_entries te
+     JOIN rooms r ON r.id = te.room_id
+     WHERE r.building_id = $1
+       AND te.term_id IS NULL
+       AND te.valid_from <= $2
+       AND te.valid_to >= $2
+     LIMIT 1`,
     [buildingId, dateStr]
   );
-  return res.rows.length > 0;
+  return legacyRes.rows.length > 0;
 }
 
 // ── Helper queries ─────────────────────────────────────────

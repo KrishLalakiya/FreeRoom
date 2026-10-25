@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { mergeOverlapping, computeFreeIntervals } from './availabilityEngine.js';
+import {
+  mergeOverlapping,
+  computeFreeIntervals,
+  isDateInsideAnyTerm,
+  evaluateDateAvailability,
+} from './availabilityEngine.js';
 
 /**
  * Helper: create a Date from a time string on a fixed day (2026-10-26)
@@ -146,3 +151,79 @@ describe('computeFreeIntervals', () => {
     expect(free[0].end).toEqual(utc('20:00'));
   });
 });
+
+// ── Dates outside any term show as unknown (C5) ────────────
+
+describe('dates outside any term show as unknown (C5)', () => {
+  const terms = [
+    { id: 1, name: 'Term 5', start_date: '2026-08-01', end_date: '2026-10-28' },
+    { id: 2, name: 'Term 6', start_date: '2026-11-10', end_date: '2026-12-20' },
+  ];
+
+  it('Query within term -> works normally (free or occupied)', () => {
+    // Within term, free room
+    const freeRes = evaluateDateAvailability({
+      date: '2026-09-15',
+      terms,
+      busyBlocks: [],
+    });
+    expect(freeRes.status).toBe('free');
+    expect(freeRes.free_intervals).toHaveLength(1);
+    expect(freeRes.free_intervals[0].start).toEqual(new Date('2026-09-15T00:30:00.000Z')); // 06:00 IST in UTC
+    expect(freeRes.free_intervals[0].end).toEqual(new Date('2026-09-15T16:30:00.000Z')); // 22:00 IST in UTC
+
+    // Within term, occupied/busy room
+    const dayStart = new Date('2026-09-15T00:30:00.000Z');
+    const dayEnd = new Date('2026-09-15T16:30:00.000Z');
+    const busyRes = evaluateDateAvailability({
+      date: '2026-09-15',
+      terms,
+      busyBlocks: [{ start: dayStart, end: dayEnd }],
+    });
+    expect(busyRes.status).toBe('busy');
+    expect(busyRes.free_intervals).toHaveLength(0);
+  });
+
+  it('Query before term starts -> "unknown"', () => {
+    const res = evaluateDateAvailability({
+      date: '2026-07-20',
+      terms,
+      busyBlocks: [],
+    });
+    expect(res.status).toBe('unknown');
+    expect(res.reason).toBe('Outside academic term: no timetable data');
+    expect(res.free_intervals).toHaveLength(0);
+  });
+
+  it('Query after term ends -> "unknown"', () => {
+    const res = evaluateDateAvailability({
+      date: '2026-12-25',
+      terms,
+      busyBlocks: [],
+    });
+    expect(res.status).toBe('unknown');
+    expect(res.reason).toBe('Outside academic term: no timetable data');
+    expect(res.free_intervals).toHaveLength(0);
+  });
+
+  it('Query in between terms -> "unknown"', () => {
+    const res = evaluateDateAvailability({
+      date: '2026-11-02',
+      terms,
+      busyBlocks: [],
+    });
+    expect(res.status).toBe('unknown');
+    expect(res.reason).toBe('Outside academic term: no timetable data');
+    expect(res.free_intervals).toHaveLength(0);
+  });
+
+  it('isDateInsideAnyTerm correctly handles boundary dates', () => {
+    expect(isDateInsideAnyTerm('2026-08-01', terms)).toBe(true); // Term 5 start
+    expect(isDateInsideAnyTerm('2026-10-28', terms)).toBe(true); // Term 5 end
+    expect(isDateInsideAnyTerm('2026-07-31', terms)).toBe(false); // 1 day before Term 5
+    expect(isDateInsideAnyTerm('2026-10-29', terms)).toBe(false); // 1 day after Term 5
+    expect(isDateInsideAnyTerm('2026-11-10', terms)).toBe(true); // Term 6 start
+    expect(isDateInsideAnyTerm('2026-12-20', terms)).toBe(true); // Term 6 end
+  });
+});
+
