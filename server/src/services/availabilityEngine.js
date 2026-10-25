@@ -56,6 +56,20 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
     return { status: 'unknown', reason: 'Outside academic term: no timetable data', rooms: [], coverage };
   }
 
+  // Check building operating hours (06:00 to 22:00)
+  const dayStart = zonedTimeToUtc(dateStr, building.opening_time || '06:00');
+  const dayEnd = zonedTimeToUtc(dateStr, building.closing_time || '22:00');
+
+  if (now < dayStart || now >= dayEnd) {
+    return {
+      status: 'building_closed',
+      reason: `Building is currently closed. Operating hours are ${building.opening_time || '06:00'} to ${building.closing_time || '22:00'}.`,
+      rooms: [],
+      closed_rooms: [],
+      coverage,
+    };
+  }
+
   // C9: Check for active building closures on this date
   const buildingClosure = await getActiveBuildingClosure(buildingId, dateStr, now);
   if (buildingClosure) {

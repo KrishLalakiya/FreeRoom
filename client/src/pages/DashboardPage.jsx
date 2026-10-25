@@ -227,7 +227,7 @@ export default function DashboardPage() {
       <div className="hero-section">
         <div className="live-pill">
           <span className="live-pulse-dot" />
-          <span>Live Availability · Pilot Building (9 AM – 8 PM)</span>
+          <span>Live Availability · Pilot Building (6 AM – 10 PM)</span>
         </div>
         <h1 className="hero-title">
           {greeting}, <span className="hero-title-gradient">{firstName}</span>
@@ -318,6 +318,28 @@ export default function DashboardPage() {
                 {coverage?.valid_from
                   ? `The uploaded timetable only covers ${coverage.valid_from} to ${coverage.valid_to}. Rooms are not shown as free outside that range.`
                   : 'No timetable has been uploaded yet. Ask a schedule admin to import the weekly timetable.'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Building Closed (Outside operating hours 6 AM - 10 PM) */}
+      {scheduleStatus === 'building_closed' && (
+        <div className="card fade-in" style={{
+          marginBottom: 20,
+          borderColor: 'var(--accent-warning, #f59e0b)',
+          background: 'rgba(245, 158, 11, 0.08)',
+          padding: '16px 20px',
+        }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <span style={{ fontSize: '1.75rem', lineHeight: 1 }}>🌙</span>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--text-primary)', marginBottom: 3 }}>
+                Building is currently closed (Operating Hours: 6:00 AM – 10:00 PM)
+              </div>
+              <div style={{ fontSize: '0.86rem', color: 'var(--text-secondary)' }}>
+                {scheduleReason || 'Classrooms are not open outside operating hours. Switch to "Search Future Window" or "My Group Schedule" to view daytime classes and plan ahead.'}
               </div>
             </div>
           </div>
@@ -675,6 +697,8 @@ export default function DashboardPage() {
               ? 'The timetable does not cover this date, so availability is unknown rather than assumed free.'
               : scheduleStatus === 'closed'
               ? 'Campus is closed on this date, so no rooms are shown as free.'
+              : scheduleStatus === 'building_closed'
+              ? 'The building is currently closed (operating hours: 6:00 AM – 10:00 PM). Use "Search Future Window" or "My Group Schedule" to view daytime schedules.'
               : mode === 'now'
               ? `No rooms are free for ${minDuration}+ minutes right now. Try a shorter duration.`
               : 'No rooms match your search window. Try different hours or dates.'}
