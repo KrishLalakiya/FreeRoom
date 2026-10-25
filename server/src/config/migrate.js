@@ -72,22 +72,107 @@ async function migrate() {
       );
     `);
 
+    // ── Batches (C3, C17) ─────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS batches (
+        id          SERIAL PRIMARY KEY,
+        year        INTEGER UNIQUE NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    // ── Terms (C3) ────────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS terms (
+        id              SERIAL PRIMARY KEY,
+        batch_id        INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+        semester_number SMALLINT NOT NULL,
+        term_number     SMALLINT NOT NULL,
+        start_date      DATE NOT NULL,
+        end_date        DATE NOT NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (start_date <= end_date),
+        UNIQUE(batch_id, term_number)
+      );
+    `);
+
+    // ── Subjects (C17) ───────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS subjects (
+        id          SERIAL PRIMARY KEY,
+        name        VARCHAR(255) NOT NULL,
+        short_code  VARCHAR(100),
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(name)
+      );
+    `);
+
+    // ── Instructors (C17) ─────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS instructors (
+        id          SERIAL PRIMARY KEY,
+        name        VARCHAR(255) NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(name)
+      );
+    `);
+
+    // ── Groups (C17) ──────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS groups (
+        id          SERIAL PRIMARY KEY,
+        batch_id    INTEGER NOT NULL REFERENCES batches(id) ON DELETE CASCADE,
+        name        VARCHAR(100) NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(batch_id, name)
+      );
+    `);
+
     // ── Timetable entries (recurring weekly classes) ───────
+    // v2 adds term_id, subject_id, instructor_id, entry_type (C3, C17).
+    // Old columns (course_name, teacher, group_name, valid_from, valid_to) are
+    // kept for backward compatibility but superseded by linked records.
     await client.query(`
       CREATE TABLE IF NOT EXISTS timetable_entries (
-        id            SERIAL PRIMARY KEY,
-        room_id       INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-        course_name   VARCHAR(255) NOT NULL,
-        teacher       VARCHAR(255),
-        group_name    VARCHAR(100),
-        day_of_week   SMALLINT NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
-        start_time    TIME NOT NULL,
-        end_time      TIME NOT NULL,
-        valid_from    DATE NOT NULL,
-        valid_to      DATE NOT NULL,
-        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        CHECK (start_time < end_time),
-        CHECK (valid_from <= valid_to)
+        id              SERIAL PRIMARY KEY,
+        room_id         INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+        term_id         INTEGER REFERENCES terms(id) ON DELETE CASCADE,
+        subject_id      INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
+        instructor_id   INTEGER REFERENCES instructors(id) ON DELETE SET NULL,
+        entry_type      VARCHAR(20) NOT NULL DEFAULT 'class'
+                          CHECK (entry_type IN ('class', 'lab', 'club')),
+        day_of_week     SMALLINT NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+        start_time      TIME NOT NULL,
+        end_time        TIME NOT NULL,
+        -- Legacy columns kept for migration; new imports use term_id instead
+        course_name     VARCHAR(255),
+        teacher         VARCHAR(255),
+        group_name      VARCHAR(100),
+        valid_from      DATE,
+        valid_to        DATE,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (start_time < end_time)
+      );
+    `);
+
+    // v2 columns added via ALTER for existing databases
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS term_id INTEGER REFERENCES terms(id) ON DELETE CASCADE;
+        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL;
+        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS instructor_id INTEGER REFERENCES instructors(id) ON DELETE SET NULL;
+        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS entry_type VARCHAR(20) NOT NULL DEFAULT 'class';
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
+    `);
+
+    // ── Timetable entry ↔ groups junction (C17) ──────────
+    // A class can belong to zero, one or several groups.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS timetable_entry_groups (
+        timetable_entry_id  INTEGER NOT NULL REFERENCES timetable_entries(id) ON DELETE CASCADE,
+        group_id            INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        PRIMARY KEY (timetable_entry_id, group_id)
       );
     `);
 
@@ -95,6 +180,12 @@ async function migrate() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_timetable_room_day
       ON timetable_entries (room_id, day_of_week);
+    `);
+
+    // Index for term-based lookups
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_timetable_term
+      ON timetable_entries (term_id);
     `);
 
     // ── Schedule exceptions (cancellations) ────────────────

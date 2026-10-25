@@ -6,7 +6,7 @@ dotenv.config();
 
 /**
  * Seed the database with pilot building data.
- * Matches the PRD section 5 room list.
+ * v2: adds batches, terms, groups, subjects, instructors (C3, C17).
  */
 async function seed() {
   // Run migration first
@@ -68,59 +68,124 @@ async function seed() {
       `, [a.alias, a.roomId]);
     }
 
-    // ── Sample timetable entries ───────────────────────────
-    // These simulate the Google Sheet timetable for the pilot
-    const today = new Date();
-    const validFrom = new Date(Date.UTC(today.getFullYear(), today.getMonth(), 1));
-    const validTo = new Date(Date.UTC(today.getFullYear(), today.getMonth() + 5, 0));
-    const vf = validFrom.toISOString().split('T')[0];
-    const vt = validTo.toISOString().split('T')[0];
+    // ── Batches (C3) ──────────────────────────────────────
+    const batch2029 = await upsertBatch(client, 2029);
+    const batch2028 = await upsertBatch(client, 2028);
 
+    // ── Terms (C3) ────────────────────────────────────────
+    const term5 = await upsertTerm(client, batch2029, 3, 5, '2026-08-01', '2026-10-28');
+    const term9 = await upsertTerm(client, batch2028, 5, 9, '2026-08-01', '2026-10-28');
+
+    // ── Groups (C17) ──────────────────────────────────────
+    const grpA_2029 = await upsertGroup(client, batch2029, 'A');
+    const grpB_2029 = await upsertGroup(client, batch2029, 'B');
+    const grpC_2029 = await upsertGroup(client, batch2029, 'C');
+    const grpA_2028 = await upsertGroup(client, batch2028, 'A');
+    const grpB_2028 = await upsertGroup(client, batch2028, 'B');
+
+    // ── Subjects (C17) ────────────────────────────────────
+    const subMERN = await upsertSubject(client, 'MERN Stack Development', 'MERN');
+    const subDS = await upsertSubject(client, 'Data Structures', 'DS');
+    const subOS = await upsertSubject(client, 'Operating Systems', 'OS');
+    const subCN = await upsertSubject(client, 'Computer Networks', 'CN');
+    const subFDSA = await upsertSubject(client, 'FDSA', 'FDSA');
+    const subDB = await upsertSubject(client, 'Database Management', 'DB');
+    const subWeb = await upsertSubject(client, 'Web Technologies', 'WEB');
+    const subML = await upsertSubject(client, 'Machine Learning', 'ML');
+    const subCloud = await upsertSubject(client, 'Cloud Computing', 'CLOUD');
+    const subAlgo = await upsertSubject(client, 'Algorithms', 'ALGO');
+    const subDevOps = await upsertSubject(client, 'DevOps', 'DEVOPS');
+    const subCapstone = await upsertSubject(client, 'Capstone Project', 'CAP');
+    const subFDSAR = await upsertSubject(client, 'FDSA Repeat', 'FDSAR');
+    const subClubs = await upsertSubject(client, 'Academic Clubs', 'CLUBS');
+    const subWorkshop = await upsertSubject(client, 'Workshop Lab A', 'WKSHP');
+
+    // ── Instructors (C17) ─────────────────────────────────
+    const instMrinal = await upsertInstructor(client, 'Mrinal');
+    const instSharma = await upsertInstructor(client, 'Sharma');
+    const instGupta = await upsertInstructor(client, 'Gupta');
+    const instSingh = await upsertInstructor(client, 'Singh');
+    const instKumar = await upsertInstructor(client, 'Kumar');
+    const instPatel = await upsertInstructor(client, 'Patel');
+    const instMehta = await upsertInstructor(client, 'Mehta');
+    const instJain = await upsertInstructor(client, 'Jain');
+    const instReddy = await upsertInstructor(client, 'Reddy');
+    const instDas = await upsertInstructor(client, 'Das');
+    const instVerma = await upsertInstructor(client, 'Verma');
+
+    // ── Sample timetable entries ───────────────────────────
+    // Each entry now carries term_id, subject_id, instructor_id, entry_type
+    // and is linked to groups via the junction table.
     const sampleClasses = [
-      // Monday (1)
-      { roomId: room1A, course: 'MERN Stack Development', teacher: 'Mrinal', group: 'Group A', day: 1, start: '10:00', end: '12:00' },
-      { roomId: room1B, course: 'Data Structures', teacher: 'Sharma', group: 'Group B', day: 1, start: '10:00', end: '12:00' },
-      { roomId: room2A, course: 'Operating Systems', teacher: 'Gupta', group: 'Group C', day: 1, start: '14:00', end: '16:00' },
-      { roomId: room2B, course: 'Computer Networks', teacher: 'Singh', group: 'Group A', day: 1, start: '14:00', end: '16:00' },
-      { roomId: roomC, course: 'Academic Clubs', teacher: null, group: null, day: 1, start: '17:30', end: '20:00' },
+      // Monday (1) — batch 2029
+      { termId: term5, roomId: room1A, subjectId: subMERN, instructorId: instMrinal, groups: [grpA_2029], day: 1, start: '10:00', end: '12:00', type: 'class' },
+      { termId: term5, roomId: room1B, subjectId: subDS, instructorId: instSharma, groups: [grpB_2029], day: 1, start: '10:00', end: '12:00', type: 'class' },
+      { termId: term5, roomId: room2A, subjectId: subOS, instructorId: instGupta, groups: [grpC_2029], day: 1, start: '14:00', end: '16:00', type: 'class' },
+      { termId: term5, roomId: room2B, subjectId: subCN, instructorId: instSingh, groups: [grpA_2029], day: 1, start: '14:00', end: '16:00', type: 'class' },
+      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 1, start: '17:30', end: '20:00', type: 'club' },
 
       // Tuesday (2)
-      { roomId: room1A, course: 'FDSA', teacher: 'Kumar', group: 'Group A', day: 2, start: '09:00', end: '11:00' },
-      { roomId: room2C, course: 'Database Management', teacher: 'Patel', group: 'Group B', day: 2, start: '09:00', end: '11:00' },
-      { roomId: room1B, course: 'Web Technologies', teacher: 'Mehta', group: 'Group C', day: 2, start: '11:00', end: '13:00' },
-      { roomId: room2B1, course: 'Machine Learning', teacher: 'Jain', group: 'Group A', day: 2, start: '14:00', end: '16:00' },
-      { roomId: roomC, course: 'Academic Clubs', teacher: null, group: null, day: 2, start: '17:30', end: '20:00' },
+      { termId: term5, roomId: room1A, subjectId: subFDSA, instructorId: instKumar, groups: [grpA_2029], day: 2, start: '09:00', end: '11:00', type: 'class' },
+      { termId: term5, roomId: room2C, subjectId: subDB, instructorId: instPatel, groups: [grpB_2029], day: 2, start: '09:00', end: '11:00', type: 'class' },
+      { termId: term5, roomId: room1B, subjectId: subWeb, instructorId: instMehta, groups: [grpC_2029], day: 2, start: '11:00', end: '13:00', type: 'class' },
+      { termId: term5, roomId: room2B1, subjectId: subML, instructorId: instJain, groups: [grpA_2029], day: 2, start: '14:00', end: '16:00', type: 'class' },
+      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 2, start: '17:30', end: '20:00', type: 'club' },
 
       // Wednesday (3)
-      { roomId: room1A, course: 'MERN Stack Development', teacher: 'Mrinal', group: 'Group B', day: 3, start: '10:00', end: '12:00' },
-      { roomId: room2A, course: 'Cloud Computing', teacher: 'Reddy', group: 'Group A', day: 3, start: '10:00', end: '12:00' },
-      { roomId: room2B2, course: 'Algorithms', teacher: 'Das', group: 'Group C', day: 3, start: '14:00', end: '16:00' },
-      { roomId: roomC, course: 'Academic Clubs', teacher: null, group: null, day: 3, start: '17:30', end: '20:00' },
+      { termId: term5, roomId: room1A, subjectId: subMERN, instructorId: instMrinal, groups: [grpB_2029], day: 3, start: '10:00', end: '12:00', type: 'class' },
+      { termId: term5, roomId: room2A, subjectId: subCloud, instructorId: instReddy, groups: [grpA_2029], day: 3, start: '10:00', end: '12:00', type: 'class' },
+      { termId: term5, roomId: room2B2, subjectId: subAlgo, instructorId: instDas, groups: [grpC_2029], day: 3, start: '14:00', end: '16:00', type: 'class' },
+      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 3, start: '17:30', end: '20:00', type: 'club' },
 
       // Thursday (4)
-      { roomId: room1B, course: 'FDSA', teacher: 'Kumar', group: 'Group B', day: 4, start: '09:00', end: '11:00' },
-      { roomId: room2C, course: 'Computer Networks', teacher: 'Singh', group: 'Group C', day: 4, start: '09:00', end: '11:00' },
-      { roomId: room1A, course: 'DevOps', teacher: 'Verma', group: 'Group A', day: 4, start: '11:00', end: '13:00' },
-      { roomId: room2B, course: 'Capstone Project', teacher: 'Mrinal', group: 'All', day: 4, start: '14:00', end: '17:00' },
-      { roomId: roomC, course: 'Academic Clubs', teacher: null, group: null, day: 4, start: '17:30', end: '20:00' },
+      { termId: term5, roomId: room1B, subjectId: subFDSA, instructorId: instKumar, groups: [grpB_2029], day: 4, start: '09:00', end: '11:00', type: 'class' },
+      { termId: term5, roomId: room2C, subjectId: subCN, instructorId: instSingh, groups: [grpC_2029], day: 4, start: '09:00', end: '11:00', type: 'class' },
+      { termId: term5, roomId: room1A, subjectId: subDevOps, instructorId: instVerma, groups: [grpA_2029], day: 4, start: '11:00', end: '13:00', type: 'class' },
+      { termId: term5, roomId: room2B, subjectId: subCapstone, instructorId: instMrinal, groups: [grpA_2029, grpB_2029, grpC_2029], day: 4, start: '14:00', end: '17:00', type: 'class' },
+      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 4, start: '17:30', end: '20:00', type: 'club' },
 
       // Friday (5)
-      { roomId: room1A, course: 'Cloud Computing', teacher: 'Reddy', group: 'Group C', day: 5, start: '10:00', end: '12:00' },
-      { roomId: room1B, course: 'Machine Learning', teacher: 'Jain', group: 'Group B', day: 5, start: '10:00', end: '12:00' },
-      { roomId: room2A, course: 'MERN Stack Development', teacher: 'Mrinal', group: 'Group C', day: 5, start: '14:00', end: '16:00' },
-      { roomId: roomC, course: 'Academic Clubs', teacher: null, group: null, day: 5, start: '17:30', end: '20:00' },
+      { termId: term5, roomId: room1A, subjectId: subCloud, instructorId: instReddy, groups: [grpC_2029], day: 5, start: '10:00', end: '12:00', type: 'class' },
+      { termId: term5, roomId: room1B, subjectId: subML, instructorId: instJain, groups: [grpB_2029], day: 5, start: '10:00', end: '12:00', type: 'class' },
+      { termId: term5, roomId: room2A, subjectId: subMERN, instructorId: instMrinal, groups: [grpC_2029], day: 5, start: '14:00', end: '16:00', type: 'class' },
+      { termId: term5, roomId: roomC, subjectId: subClubs, instructorId: null, groups: [], day: 5, start: '17:30', end: '20:00', type: 'club' },
 
       // Saturday (6)
-      { roomId: room1A, course: 'FDSA Repeat', teacher: 'Kumar', group: 'All', day: 6, start: '10:00', end: '12:00' },
-      { roomId: room2B1, course: 'Workshop Lab A', teacher: 'Singh', group: 'Group A', day: 6, start: '10:00', end: '12:00' },
+      { termId: term5, roomId: room1A, subjectId: subFDSAR, instructorId: instKumar, groups: [grpA_2029, grpB_2029, grpC_2029], day: 6, start: '10:00', end: '12:00', type: 'class' },
+      { termId: term5, roomId: room2B1, subjectId: subWorkshop, instructorId: instSingh, groups: [grpA_2029], day: 6, start: '10:00', end: '12:00', type: 'lab' },
     ];
 
     for (const cls of sampleClasses) {
-      await client.query(`
-        INSERT INTO timetable_entries (room_id, course_name, teacher, group_name, day_of_week, start_time, end_time, valid_from, valid_to)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        ON CONFLICT DO NOTHING;
-      `, [cls.roomId, cls.course, cls.teacher, cls.group, cls.day, cls.start, cls.end, vf, vt]);
+      const subjectName = await getSubjectName(client, cls.subjectId);
+      const instructorName = cls.instructorId ? await getInstructorName(client, cls.instructorId) : null;
+      const groupNames = [];
+      for (const gId of cls.groups) {
+        groupNames.push(await getGroupName(client, gId));
+      }
+
+      const entryRes = await client.query(`
+        INSERT INTO timetable_entries
+          (room_id, term_id, subject_id, instructor_id, entry_type,
+           day_of_week, start_time, end_time,
+           course_name, teacher, group_name, valid_from, valid_to)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING id;
+      `, [
+        cls.roomId, cls.termId, cls.subjectId, cls.instructorId, cls.type,
+        cls.day, cls.start, cls.end,
+        subjectName, instructorName,
+        groupNames.length > 0 ? groupNames.join('+') : null,
+        '2026-08-01', '2026-10-28',
+      ]);
+
+      const entryId = entryRes.rows[0].id;
+      for (const gId of cls.groups) {
+        await client.query(`
+          INSERT INTO timetable_entry_groups (timetable_entry_id, group_id)
+          VALUES ($1, $2)
+          ON CONFLICT DO NOTHING;
+        `, [entryId, gId]);
+      }
     }
 
     // ── Create a dev admin user ────────────────────────────
@@ -134,6 +199,8 @@ async function seed() {
     console.log('🌱 Seed completed successfully');
     console.log(`   Building: Pilot Building (id=${buildingId})`);
     console.log(`   Rooms: C, 1A, 1B, 2A, 2B (2B1+2B2), 2C`);
+    console.log(`   Batches: 2028, 2029`);
+    console.log(`   Terms: Term 5 (batch 2029), Term 9 (batch 2028)`);
     console.log(`   Timetable entries: ${sampleClasses.length}`);
     console.log(`   Room aliases: ${aliases.length}`);
   } catch (err) {
@@ -145,9 +212,8 @@ async function seed() {
   }
 }
 
-/**
- * Insert or update a room, return its id.
- */
+// ── Helper functions ──────────────────────────────────────
+
 async function upsertRoom(client, buildingId, name, floor, capacity, parentRoomId = null) {
   const res = await client.query(`
     INSERT INTO rooms (building_id, name, floor, capacity, parent_room_id)
@@ -159,6 +225,70 @@ async function upsertRoom(client, buildingId, name, floor, capacity, parentRoomI
     RETURNING id;
   `, [buildingId, name, floor, capacity, parentRoomId]);
   return res.rows[0].id;
+}
+
+async function upsertBatch(client, year) {
+  const res = await client.query(`
+    INSERT INTO batches (year) VALUES ($1)
+    ON CONFLICT (year) DO UPDATE SET year = EXCLUDED.year
+    RETURNING id;
+  `, [year]);
+  return res.rows[0].id;
+}
+
+async function upsertTerm(client, batchId, semesterNumber, termNumber, startDate, endDate) {
+  const res = await client.query(`
+    INSERT INTO terms (batch_id, semester_number, term_number, start_date, end_date)
+    VALUES ($1, $2, $3, $4, $5)
+    ON CONFLICT (batch_id, term_number) DO UPDATE SET
+      semester_number = EXCLUDED.semester_number,
+      start_date = EXCLUDED.start_date,
+      end_date = EXCLUDED.end_date
+    RETURNING id;
+  `, [batchId, semesterNumber, termNumber, startDate, endDate]);
+  return res.rows[0].id;
+}
+
+async function upsertGroup(client, batchId, name) {
+  const res = await client.query(`
+    INSERT INTO groups (batch_id, name) VALUES ($1, $2)
+    ON CONFLICT (batch_id, name) DO UPDATE SET name = EXCLUDED.name
+    RETURNING id;
+  `, [batchId, name]);
+  return res.rows[0].id;
+}
+
+async function upsertSubject(client, name, shortCode = null) {
+  const res = await client.query(`
+    INSERT INTO subjects (name, short_code) VALUES ($1, $2)
+    ON CONFLICT (name) DO UPDATE SET short_code = COALESCE(EXCLUDED.short_code, subjects.short_code)
+    RETURNING id;
+  `, [name, shortCode]);
+  return res.rows[0].id;
+}
+
+async function upsertInstructor(client, name) {
+  const res = await client.query(`
+    INSERT INTO instructors (name) VALUES ($1)
+    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+    RETURNING id;
+  `, [name]);
+  return res.rows[0].id;
+}
+
+async function getSubjectName(client, subjectId) {
+  const res = await client.query('SELECT name FROM subjects WHERE id = $1', [subjectId]);
+  return res.rows[0]?.name || null;
+}
+
+async function getInstructorName(client, instructorId) {
+  const res = await client.query('SELECT name FROM instructors WHERE id = $1', [instructorId]);
+  return res.rows[0]?.name || null;
+}
+
+async function getGroupName(client, groupId) {
+  const res = await client.query('SELECT name FROM groups WHERE id = $1', [groupId]);
+  return res.rows[0]?.name || null;
 }
 
 // Run if called directly

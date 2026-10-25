@@ -248,25 +248,48 @@ async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now =
 /**
  * Get timetable occurrences for a room on a specific day,
  * expanded into concrete UTC Date objects for the given campus date.
+ *
+ * v2 (C3, C17): prefers term date range via terms.start_date/end_date;
+ * falls back to legacy valid_from/valid_to for entries without a term_id.
  */
 async function getTimetableOccurrences(roomId, dateStr, dayOfWeek) {
   const res = await query(
     `
-    SELECT id, course_name, teacher, group_name, start_time, end_time
-    FROM timetable_entries
-    WHERE room_id = $1
-      AND day_of_week = $2
-      AND valid_from <= $3
-      AND valid_to >= $3
+    SELECT
+      te.id,
+      te.entry_type,
+      te.start_time,
+      te.end_time,
+      -- v2 linked fields
+      s.name          AS subject_name,
+      i.name          AS instructor_name,
+      -- legacy fallbacks
+      te.course_name,
+      te.teacher,
+      te.group_name
+    FROM timetable_entries te
+    LEFT JOIN terms       t ON t.id = te.term_id
+    LEFT JOIN subjects    s ON s.id = te.subject_id
+    LEFT JOIN instructors i ON i.id = te.instructor_id
+    WHERE te.room_id    = $1
+      AND te.day_of_week = $2
+      AND (
+        -- entries with a term: active when date is inside the term
+        (te.term_id IS NOT NULL AND t.start_date <= $3 AND t.end_date >= $3)
+        OR
+        -- legacy entries without a term: use old valid_from/valid_to
+        (te.term_id IS NULL AND te.valid_from <= $3 AND te.valid_to >= $3)
+      )
   `,
     [roomId, dayOfWeek, dateStr]
   );
 
   return res.rows.map((entry) => ({
     timetable_entry_id: entry.id,
-    title: entry.course_name,
-    teacher: entry.teacher,
+    title: entry.subject_name || entry.course_name,
+    teacher: entry.instructor_name || entry.teacher,
     group: entry.group_name,
+    entry_type: entry.entry_type || 'class',
     start: zonedTimeToUtc(dateStr, entry.start_time),
     end: zonedTimeToUtc(dateStr, entry.end_time),
     type: 'class',
@@ -373,17 +396,23 @@ export function computeFreeIntervals(busyBlocks, dayStart, dayEnd) {
 }
 
 /**
- * Whether any timetable entry is valid on this campus date.
- * A date with no timetable coverage is "unknown", never "free" (PRD section 5).
+ * Whether the given date falls inside any term for rooms in this building,
+ * OR inside any legacy timetable entry's valid_from/valid_to range.
+ * A date with no coverage is "unknown", never "free" (C3/C5).
  */
 async function hasTimetableForDate(buildingId, dateStr) {
   const res = await query(
     `
-    SELECT 1 FROM timetable_entries te
+    SELECT 1
+    FROM timetable_entries te
     JOIN rooms r ON r.id = te.room_id
+    LEFT JOIN terms t ON t.id = te.term_id
     WHERE r.building_id = $1
-      AND te.valid_from <= $2
-      AND te.valid_to >= $2
+      AND (
+        (te.term_id IS NOT NULL AND t.start_date <= $2 AND t.end_date >= $2)
+        OR
+        (te.term_id IS NULL AND te.valid_from <= $2 AND te.valid_to >= $2)
+      )
     LIMIT 1
   `,
     [buildingId, dateStr]
@@ -426,19 +455,41 @@ async function getChildRooms(roomId) {
   return res.rows;
 }
 
+/**
+ * Return the date coverage for the building.
+ * v2: uses terms table (C3); falls back to legacy valid_from/valid_to.
+ */
 async function getTimetableCoverage(buildingId) {
-  const res = await query(
+  // Coverage from terms
+  const termRes = await query(
     `
-    SELECT MIN(te.valid_from)::text AS valid_from, MAX(te.valid_to)::text AS valid_to
-    FROM timetable_entries te
+    SELECT MIN(t.start_date)::text AS valid_from, MAX(t.end_date)::text AS valid_to
+    FROM terms t
+    JOIN batches b ON b.id = t.batch_id
+    JOIN timetable_entries te ON te.term_id = t.id
     JOIN rooms r ON r.id = te.room_id
     WHERE r.building_id = $1
   `,
     [buildingId]
   );
-  const row = res.rows[0];
-  if (!row || !row.valid_from) return null;
-  return { valid_from: row.valid_from, valid_to: row.valid_to };
+  const termRow = termRes.rows[0];
+  if (termRow && termRow.valid_from) {
+    return { valid_from: termRow.valid_from, valid_to: termRow.valid_to };
+  }
+
+  // Fallback: legacy valid_from/valid_to
+  const legacyRes = await query(
+    `
+    SELECT MIN(te.valid_from)::text AS valid_from, MAX(te.valid_to)::text AS valid_to
+    FROM timetable_entries te
+    JOIN rooms r ON r.id = te.room_id
+    WHERE r.building_id = $1 AND te.term_id IS NULL
+  `,
+    [buildingId]
+  );
+  const legacyRow = legacyRes.rows[0];
+  if (!legacyRow || !legacyRow.valid_from) return null;
+  return { valid_from: legacyRow.valid_from, valid_to: legacyRow.valid_to };
 }
 
 // C2: isClosedDay removed — holidays and breaks no longer close rooms.
