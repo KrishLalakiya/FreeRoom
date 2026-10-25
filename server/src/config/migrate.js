@@ -38,7 +38,7 @@ async function migrate() {
       );
     `);
 
-    // ── Closed days (holidays) ─────────────────────────────
+    // ── Closed days (legacy — C2 removed the holiday rule; C6 will replace with closures) ──
     await client.query(`
       CREATE TABLE IF NOT EXISTS closed_days (
         id          SERIAL PRIMARY KEY,

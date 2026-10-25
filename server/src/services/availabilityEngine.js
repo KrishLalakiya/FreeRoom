@@ -43,9 +43,7 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
   const dayOfWeek = dayOfWeekInTz(now);
   const coverage = await getTimetableCoverage(buildingId);
 
-  if (await isClosedDay(buildingId, dateStr)) {
-    return { status: 'closed', reason: 'closed_day', rooms: [], coverage };
-  }
+  // C2: holidays no longer close rooms; removed isClosedDay check
 
   if (!(await hasTimetableForDate(buildingId, dateStr))) {
     return { status: 'unknown', reason: 'outside_timetable_coverage', rooms: [], coverage };
@@ -95,9 +93,7 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
   const dayOfWeek = dayOfWeekForDateStr(date);
   const coverage = await getTimetableCoverage(buildingId);
 
-  if (await isClosedDay(buildingId, date)) {
-    return { status: 'closed', reason: 'closed_day', rooms: [], coverage };
-  }
+  // C2: holidays no longer close rooms; removed isClosedDay check
 
   if (!(await hasTimetableForDate(buildingId, date))) {
     return { status: 'unknown', reason: 'outside_timetable_coverage', rooms: [], coverage };
@@ -151,9 +147,7 @@ export async function getRoomTimeline(roomId, date) {
     coverage,
   };
 
-  if (await isClosedDay(room.building_id, date)) {
-    return { ...base, status: 'closed' };
-  }
+  // C2: holidays no longer close rooms; removed isClosedDay check
 
   if (!(await hasTimetableForDate(room.building_id, date))) {
     return { ...base, status: 'unknown' };
@@ -447,10 +441,5 @@ async function getTimetableCoverage(buildingId) {
   return { valid_from: row.valid_from, valid_to: row.valid_to };
 }
 
-async function isClosedDay(buildingId, dateStr) {
-  const res = await query('SELECT 1 FROM closed_days WHERE building_id = $1 AND date = $2', [
-    buildingId,
-    dateStr,
-  ]);
-  return res.rows.length > 0;
-}
+// C2: isClosedDay removed — holidays and breaks no longer close rooms.
+// The closed_days table remains in the schema; C6 will replace it with closures.
