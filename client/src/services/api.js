@@ -97,6 +97,15 @@ export const adminAPI = {
 
   deleteRoomAlias: (aliasId) =>
     api.delete(`/admin/room-aliases/${aliasId}`),
+
+  getClosures: () =>
+    api.get('/admin/closures'),
+
+  createClosure: (data) =>
+    api.post('/admin/closures', data),
+
+  deleteClosure: (closureId) =>
+    api.delete(`/admin/closures/${closureId}`),
 };
 
 export default api;

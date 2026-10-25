@@ -506,4 +506,260 @@ router.delete('/room-aliases/:id', authenticate, requireAdmin, async (req, res) 
   }
 });
 
+// ── Closures (C6, C8, C11) ───────────────────────────────────
+
+/**
+ * GET /api/admin/closures
+ * List all closures with room/building and creator details.
+ */
+router.get('/closures', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT
+        c.*,
+        r.name AS room_name,
+        b.name AS building_name,
+        u.name AS creator_name,
+        u.email AS creator_email
+      FROM closures c
+      LEFT JOIN rooms r ON r.id = c.room_id
+      LEFT JOIN buildings b ON b.id = c.building_id
+      LEFT JOIN users u ON u.id = c.created_by
+      ORDER BY c.start_date DESC, c.start_time ASC NULLS FIRST, c.id DESC
+    `);
+    res.json({ closures: result.rows });
+  } catch (err) {
+    console.error('Fetch closures error:', err);
+    res.status(500).json({ error: 'Failed to fetch closures' });
+  }
+});
+
+/**
+ * POST /api/admin/closures
+ * Create or merge an exam or emergency closure.
+ */
+router.post('/closures', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const {
+      scope,
+      buildingId = 1,
+      roomId,
+      floor,
+      startDate,
+      endDate,
+      startTime,
+      endTime,
+      reason = 'Exam',
+      note,
+    } = req.body;
+
+    // Validate scope
+    if (!['room', 'floor', 'building'].includes(scope)) {
+      return res.status(400).json({
+        error: 'Invalid scope',
+        message: 'Scope must be room, floor, or building.',
+      });
+    }
+
+    // Validate dates
+    if (!startDate || !isValidDateStr(startDate)) {
+      return res.status(400).json({
+        error: 'Invalid start date',
+        message: 'startDate is required and must be in YYYY-MM-DD format.',
+      });
+    }
+
+    const finalEndDate = endDate || startDate;
+    if (!isValidDateStr(finalEndDate)) {
+      return res.status(400).json({
+        error: 'Invalid end date',
+        message: 'endDate must be in YYYY-MM-DD format.',
+      });
+    }
+
+    if (finalEndDate < startDate) {
+      return res.status(400).json({
+        error: 'Invalid date range',
+        message: 'End date must be on or after start date.',
+      });
+    }
+
+    // Validate optional time range
+    let finalStartTime = startTime ? startTime.trim().slice(0, 5) : null;
+    let finalEndTime = endTime ? endTime.trim().slice(0, 5) : null;
+
+    if (finalStartTime || finalEndTime) {
+      if (!finalStartTime || !finalEndTime) {
+        return res.status(400).json({
+          error: 'Incomplete time range',
+          message: 'Both start time and end time must be specified, or leave both blank for whole-day closure.',
+        });
+      }
+      if (finalStartTime >= finalEndTime) {
+        return res.status(400).json({
+          error: 'Invalid time range',
+          message: 'End time must be after start time.',
+        });
+      }
+    }
+
+    let parsedRoomId = null;
+    let finalFloor = null;
+    let resolvedBuildingId = parseInt(buildingId, 10) || 1;
+
+    // Scope-specific validation
+    if (scope === 'room') {
+      parsedRoomId = parseInt(roomId, 10);
+      if (!Number.isInteger(parsedRoomId) || parsedRoomId < 1) {
+        return res.status(400).json({
+          error: 'Missing room',
+          message: 'roomId is required when scope is room.',
+        });
+      }
+      const roomCheck = await query('SELECT id, building_id, floor FROM rooms WHERE id = $1', [parsedRoomId]);
+      if (roomCheck.rows.length === 0) {
+        return res.status(404).json({
+          error: 'Room not found',
+          message: `Room with id ${parsedRoomId} does not exist.`,
+        });
+      }
+      resolvedBuildingId = roomCheck.rows[0].building_id;
+      finalFloor = roomCheck.rows[0].floor;
+    } else if (scope === 'floor') {
+      if (!floor || !floor.trim()) {
+        return res.status(400).json({
+          error: 'Missing floor',
+          message: 'floor is required when scope is floor.',
+        });
+      }
+      finalFloor = floor.trim();
+      const floorCheck = await query(
+        'SELECT 1 FROM rooms WHERE building_id = $1 AND LOWER(TRIM(floor)) = LOWER(TRIM($2)) LIMIT 1',
+        [resolvedBuildingId, finalFloor]
+      );
+      if (floorCheck.rows.length === 0) {
+        return res.status(404).json({
+          error: 'Floor not found',
+          message: `Floor "${finalFloor}" does not exist in building ${resolvedBuildingId}.`,
+        });
+      }
+    }
+
+    // Warning for past dates (C11)
+    const today = new Date().toISOString().split('T')[0];
+    let warning = null;
+    if (startDate < today) {
+      warning = 'Closure is scheduled in the past. Recorded for historical accuracy.';
+    }
+
+    // Merge check (C11: "Overlapping closures are merged, not stored twice")
+    const existingRes = await query(
+      `SELECT * FROM closures
+       WHERE scope = $1
+         AND (
+           ($1 = 'building' AND (building_id IS NULL OR building_id = $2))
+           OR ($1 = 'floor' AND LOWER(TRIM(floor)) = LOWER(TRIM($3)))
+           OR ($1 = 'room' AND room_id = $4)
+         )
+         AND start_date <= $6
+         AND end_date >= $5`,
+      [scope, resolvedBuildingId, finalFloor, parsedRoomId, startDate, finalEndDate]
+    );
+
+    // Check time overlap
+    const overlapping = existingRes.rows.filter((c) => {
+      if (!c.start_time && !finalStartTime) return true;
+      if (!c.start_time || !finalStartTime) return true;
+      const cStart = String(c.start_time).slice(0, 5);
+      const cEnd = String(c.end_time).slice(0, 5);
+      return cStart < finalEndTime && cEnd > finalStartTime;
+    });
+
+    if (overlapping.length > 0) {
+      const target = overlapping[0];
+      const mergedStart = target.start_date < startDate ? target.start_date : startDate;
+      const mergedEnd = target.end_date > finalEndDate ? target.end_date : finalEndDate;
+      let mergedStartTime = target.start_time;
+      let mergedEndTime = target.end_time;
+
+      if (!target.start_time || !finalStartTime) {
+        mergedStartTime = null;
+        mergedEndTime = null;
+      } else {
+        const tStart = String(target.start_time).slice(0, 5);
+        const tEnd = String(target.end_time).slice(0, 5);
+        mergedStartTime = tStart < finalStartTime ? tStart : finalStartTime;
+        mergedEndTime = tEnd > finalEndTime ? tEnd : finalEndTime;
+      }
+
+      const mergedNote = [target.note, note].filter(Boolean).join('; ');
+
+      const updateRes = await query(
+        `UPDATE closures
+         SET start_date = $1, end_date = $2, start_time = $3, end_time = $4,
+             reason = COALESCE($5, reason), note = $6
+         WHERE id = $7
+         RETURNING *`,
+        [mergedStart, mergedEnd, mergedStartTime, mergedEndTime, reason.trim() || target.reason, mergedNote || null, target.id]
+      );
+
+      return res.status(200).json({
+        closure: updateRes.rows[0],
+        merged: true,
+        message: 'Merged with existing overlapping closure.',
+        warning,
+      });
+    }
+
+    // Insert new closure
+    const insertRes = await query(
+      `INSERT INTO closures
+         (scope, building_id, room_id, floor, start_date, end_date, start_time, end_time, reason, note, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING *`,
+      [
+        scope,
+        resolvedBuildingId,
+        parsedRoomId,
+        finalFloor,
+        startDate,
+        finalEndDate,
+        finalStartTime,
+        finalEndTime,
+        reason.trim() || 'Exam',
+        note ? note.trim() : null,
+        req.user.id,
+      ]
+    );
+
+    res.status(201).json({
+      closure: insertRes.rows[0],
+      merged: false,
+      warning,
+    });
+  } catch (err) {
+    console.error('Closure creation error:', err);
+    res.status(500).json({ error: 'Failed to create closure' });
+  }
+});
+
+/**
+ * DELETE /api/admin/closures/:id
+ */
+router.delete('/closures/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const closureId = parseInt(req.params.id, 10);
+    const result = await query('DELETE FROM closures WHERE id = $1 RETURNING *', [closureId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Closure not found' });
+    }
+
+    res.json({ message: 'Closure deleted', closure: result.rows[0] });
+  } catch (err) {
+    console.error('Delete closure error:', err);
+    res.status(500).json({ error: 'Failed to delete closure' });
+  }
+});
+
 export default router;

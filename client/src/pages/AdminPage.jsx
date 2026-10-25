@@ -14,6 +14,7 @@ import {
   HiOutlineLink,
   HiOutlineCheckCircle,
   HiOutlineExclamationCircle,
+  HiOutlineLockClosed,
 } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 
@@ -23,7 +24,7 @@ export default function AdminPage() {
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState('events'); // 'events', 'cancel', 'timetable'
+  const [activeTab, setActiveTab] = useState('events'); // 'events', 'cancel', 'timetable', 'import', 'closures'
   const [rooms, setRooms] = useState([]);
   const [events, setEvents] = useState([]);
   const [timetable, setTimetable] = useState([]);
@@ -69,6 +70,20 @@ export default function AdminPage() {
   const [aliasRoomId, setAliasRoomId] = useState('');
   const [savingAlias, setSavingAlias] = useState(false);
 
+  // Closures state (C8)
+  const [closures, setClosures] = useState([]);
+  const [closureScope, setClosureScope] = useState('room');
+  const [closureRoomId, setClosureRoomId] = useState('');
+  const [closureFloor, setClosureFloor] = useState('Ground');
+  const [closureStartDate, setClosureStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [closureEndDate, setClosureEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [closureIsWholeDay, setClosureIsWholeDay] = useState(true);
+  const [closureStartTime, setClosureStartTime] = useState('09:00');
+  const [closureEndTime, setClosureEndTime] = useState('13:00');
+  const [closureReason, setClosureReason] = useState('Exam');
+  const [closureNote, setClosureNote] = useState('');
+  const [creatingClosure, setCreatingClosure] = useState(false);
+
   useEffect(() => {
     if (!isAdmin) {
       toast.error('Admin privileges required');
@@ -82,12 +97,13 @@ export default function AdminPage() {
   const loadInitialData = async () => {
     setLoading(true);
     try {
-      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes] = await Promise.all([
+      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes, closuresRes] = await Promise.all([
         roomsAPI.list(1),
         adminAPI.getEvents(),
         adminAPI.getTimetable(),
         adminAPI.getRoomAliases(),
         adminAPI.getTerms(),
+        adminAPI.getClosures(),
       ]);
 
       const rList = roomsRes.data.rooms || [];
@@ -95,10 +111,13 @@ export default function AdminPage() {
       if (rList.length > 0) {
         setEventRoomId((current) => current || rList[0].id);
         setAliasRoomId((current) => current || rList[0].id);
+        setClosureRoomId((current) => current || rList[0].id.toString());
+        setClosureFloor((current) => current || rList[0].floor || 'Ground');
       }
       setEvents(eventsRes.data.events || []);
       setTimetable(timetableRes.data.entries || []);
       setAliases(aliasesRes.data.aliases || []);
+      setClosures(closuresRes.data.closures || []);
 
       const tList = termsRes.data.terms || [];
       setTerms(tList);
@@ -305,6 +324,76 @@ export default function AdminPage() {
     }
   };
 
+  const handleCreateClosure = async (e) => {
+    e.preventDefault();
+    if (closureScope === 'building') {
+      const confirmed = window.confirm(
+        '⚠️ Are you sure you want to close the ENTIRE college building? This will mark all classrooms as closed for this period.'
+      );
+      if (!confirmed) return;
+    }
+
+    if (closureEndDate < closureStartDate) {
+      toast.error('End date cannot be before start date');
+      return;
+    }
+
+    if (!closureIsWholeDay && closureStartTime >= closureEndTime) {
+      toast.error('Start time must be before end time');
+      return;
+    }
+
+    setCreatingClosure(true);
+    try {
+      const payload = {
+        scope: closureScope,
+        startDate: closureStartDate,
+        endDate: closureEndDate,
+        startTime: closureIsWholeDay ? null : closureStartTime,
+        endTime: closureIsWholeDay ? null : closureEndTime,
+        reason: closureReason.trim() || 'Exam',
+        note: closureNote.trim() || null,
+      };
+
+      if (closureScope === 'room') {
+        payload.roomId = parseInt(closureRoomId, 10);
+      } else if (closureScope === 'floor') {
+        payload.floor = closureFloor;
+      }
+
+      const res = await adminAPI.createClosure(payload);
+      if (res.data.warning) {
+        toast((t) => <span>⚠️ {res.data.warning}</span>, { icon: '⚠️' });
+      }
+      if (res.data.merged) {
+        toast.success('Overlapping closure merged successfully!');
+      } else {
+        toast.success('Closure scheduled successfully!');
+      }
+
+      setClosureNote('');
+      const updated = await adminAPI.getClosures();
+      setClosures(updated.data.closures || []);
+    } catch (err) {
+      console.error('Failed to create closure:', err);
+      toast.error(err.response?.data?.message || 'Failed to create closure');
+    } finally {
+      setCreatingClosure(false);
+    }
+  };
+
+  const handleDeleteClosure = async (closureId) => {
+    if (!window.confirm('Are you sure you want to delete this closure?')) return;
+    try {
+      await adminAPI.deleteClosure(closureId);
+      toast.success('Closure removed');
+      setClosures((prev) => prev.filter((c) => c.id !== closureId));
+    } catch (err) {
+      console.error('Failed to delete closure:', err);
+      toast.error('Failed to delete closure');
+    }
+  };
+
   return (
     <div className="app-container">
       <Navbar />
@@ -320,7 +409,7 @@ export default function AdminPage() {
           Schedule Administration
         </h1>
         <p className="section-subtitle">
-          Create one-off events with clash detection, cancel single occurrences of classes, and inspect master timetable.
+          Create one-off events with clash detection, cancel single occurrences of classes, inspect master timetable, and manage exam closures.
         </p>
       </div>
 
@@ -332,6 +421,13 @@ export default function AdminPage() {
         >
           <HiOutlineCalendar size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
           One-Off Events
+        </button>
+        <button
+          className={`search-tab ${activeTab === 'closures' ? 'search-tab-active' : ''}`}
+          onClick={() => setActiveTab('closures')}
+        >
+          <HiOutlineLockClosed size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+          Exam & Room Closures
         </button>
         <button
           className={`search-tab ${activeTab === 'cancel' ? 'search-tab-active' : ''}`}
@@ -972,6 +1068,300 @@ export default function AdminPage() {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Tab: Exam & Room Closures (C8) ────────────────── */}
+      {activeTab === 'closures' && (
+        <div className="admin-grid fade-in">
+          {/* Create Closure Card */}
+          <div className="admin-card">
+            <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <HiOutlineLockClosed size={20} style={{ color: 'var(--accent-primary)' }} />
+              Schedule Exam or Room Closure
+            </h2>
+            <p className="section-subtitle" style={{ marginBottom: 16 }}>
+              Block rooms, entire floors, or the college building for exams or maintenance. Closures supersede normal timetables.
+            </p>
+
+            <form onSubmit={handleCreateClosure}>
+              <div className="input-group">
+                <label className="input-label">Closure Scope</label>
+                <div style={{ display: 'flex', gap: 12, marginTop: 4, flexWrap: 'wrap' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.9rem' }}>
+                    <input
+                      type="radio"
+                      name="closureScope"
+                      value="room"
+                      checked={closureScope === 'room'}
+                      onChange={() => setClosureScope('room')}
+                    />
+                    Specific Room
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.9rem' }}>
+                    <input
+                      type="radio"
+                      name="closureScope"
+                      value="floor"
+                      checked={closureScope === 'floor'}
+                      onChange={() => setClosureScope('floor')}
+                    />
+                    Entire Floor
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontSize: '0.9rem' }}>
+                    <input
+                      type="radio"
+                      name="closureScope"
+                      value="building"
+                      checked={closureScope === 'building'}
+                      onChange={() => setClosureScope('building')}
+                    />
+                    Whole Building
+                  </label>
+                </div>
+              </div>
+
+              {closureScope === 'room' && (
+                <div className="input-group">
+                  <label className="input-label">Classroom</label>
+                  <select
+                    className="input-field"
+                    value={closureRoomId}
+                    onChange={(e) => setClosureRoomId(e.target.value)}
+                    required
+                  >
+                    {rooms.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        Room {r.name} ({r.floor} Floor · {r.capacity} seats)
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                    Note: Closing Room 2B automatically blocks sub-rooms 2B1 and 2B2. Closing 2B1 or 2B2 blocks full 2B.
+                  </div>
+                </div>
+              )}
+
+              {closureScope === 'floor' && (
+                <div className="input-group">
+                  <label className="input-label">Select Floor</label>
+                  <select
+                    className="input-field"
+                    value={closureFloor}
+                    onChange={(e) => setClosureFloor(e.target.value)}
+                    required
+                  >
+                    {[...new Set(rooms.map((r) => r.floor).filter(Boolean))].map((f) => (
+                      <option key={f} value={f}>
+                        {f} Floor
+                      </option>
+                    ))}
+                  </select>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                    Note: Closing a floor covers every classroom on that floor.
+                  </div>
+                </div>
+              )}
+
+              {closureScope === 'building' && (
+                <div className="card" style={{ padding: 12, marginBottom: 16, borderColor: 'var(--accent-warning)', background: 'var(--accent-warning-bg, rgba(245, 158, 11, 0.1))' }}>
+                  <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    ⚠️ Whole Building Closure
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: 2 }}>
+                    This will block all classrooms across all floors during the specified period. A confirmation dialog will appear upon saving.
+                  </div>
+                </div>
+              )}
+
+              <div className="form-row">
+                <div className="input-group">
+                  <label className="input-label">Start Date</label>
+                  <input
+                    type="date"
+                    className="input-field"
+                    value={closureStartDate}
+                    onChange={(e) => {
+                      setClosureStartDate(e.target.value);
+                      if (closureEndDate < e.target.value) {
+                        setClosureEndDate(e.target.value);
+                      }
+                    }}
+                    required
+                  />
+                </div>
+                <div className="input-group">
+                  <label className="input-label">End Date</label>
+                  <input
+                    type="date"
+                    className="input-field"
+                    value={closureEndDate}
+                    min={closureStartDate}
+                    onChange={(e) => setClosureEndDate(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="input-group" style={{ marginBottom: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: '0.9rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={closureIsWholeDay}
+                    onChange={(e) => setClosureIsWholeDay(e.target.checked)}
+                  />
+                  <span>Whole Day Closure (Building Hours)</span>
+                </label>
+              </div>
+
+              {!closureIsWholeDay && (
+                <div className="form-row">
+                  <div className="input-group">
+                    <label className="input-label">Start Time</label>
+                    <input
+                      type="time"
+                      className="input-field"
+                      value={closureStartTime}
+                      onChange={(e) => setClosureStartTime(e.target.value)}
+                      required={!closureIsWholeDay}
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label className="input-label">End Time</label>
+                    <input
+                      type="time"
+                      className="input-field"
+                      value={closureEndTime}
+                      onChange={(e) => setClosureEndTime(e.target.value)}
+                      required={!closureIsWholeDay}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="input-group">
+                <label className="input-label">Reason</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="e.g. Midterm Exam / Final Exam"
+                  value={closureReason}
+                  onChange={(e) => setClosureReason(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Admin Note (Optional)</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="e.g. Batch 2029 Term 5 End-term exams"
+                  value={closureNote}
+                  onChange={(e) => setClosureNote(e.target.value)}
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary btn-full"
+                disabled={creatingClosure}
+                style={{ marginTop: 12 }}
+              >
+                {creatingClosure ? 'Saving Closure...' : 'Schedule Closure'}
+              </button>
+            </form>
+          </div>
+
+          {/* Closures List Card */}
+          <div className="admin-card">
+            <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <HiOutlineViewList size={20} style={{ color: 'var(--accent-primary)' }} />
+              Active & Upcoming Closures ({closures.length})
+            </h2>
+            <p className="section-subtitle" style={{ marginBottom: 16 }}>
+              Exams and closures take priority over recurring timetables.
+            </p>
+
+            {closures.length === 0 ? (
+              <div className="empty-state">
+                <HiOutlineLockClosed size={36} className="empty-state-icon" />
+                <div className="empty-state-title">No Closures Scheduled</div>
+                <div className="empty-state-desc">Classrooms will be available according to the academic timetable.</div>
+              </div>
+            ) : (
+              <div style={{ maxHeight: 600, overflowY: 'auto' }}>
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Scope & Target</th>
+                      <th>Dates</th>
+                      <th>Time</th>
+                      <th>Reason</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {closures.map((c) => (
+                      <tr key={c.id}>
+                        <td>
+                          <div style={{ fontWeight: 600 }}>
+                            {c.scope === 'building' && 'Whole Building'}
+                            {c.scope === 'floor' && `${c.floor} Floor`}
+                            {c.scope === 'room' && `Room ${c.room_name || c.room_id}`}
+                          </div>
+                          <span
+                            className={`room-card-badge ${
+                              c.scope === 'building' ? 'badge-danger' : c.scope === 'floor' ? 'badge-split' : ''
+                            }`}
+                            style={{ fontSize: '0.7rem' }}
+                          >
+                            {c.scope}
+                          </span>
+                        </td>
+                        <td>
+                          {c.start_date === c.end_date ? (
+                            <span>{c.start_date}</span>
+                          ) : (
+                            <span>
+                              {c.start_date} <br />
+                              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>to {c.end_date}</span>
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          {!c.start_time ? (
+                            <span className="room-card-badge">Whole day</span>
+                          ) : (
+                            <span style={{ fontSize: '0.85rem' }}>
+                              {String(c.start_time).slice(0, 5)} - {String(c.end_time).slice(0, 5)}
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 500 }}>{c.reason || 'Exam'}</div>
+                          {c.note && (
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                              {c.note}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() => handleDeleteClosure(c.id)}
+                            title="Delete closure"
+                          >
+                            <HiOutlineTrash size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
