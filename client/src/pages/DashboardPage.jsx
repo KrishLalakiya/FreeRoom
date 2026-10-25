@@ -9,6 +9,7 @@ import {
   HiOutlineClock,
   HiOutlineCalendar,
   HiOutlineRefresh,
+  HiOutlineUserGroup,
 } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 
@@ -40,6 +41,50 @@ export default function DashboardPage() {
   const [searchDate, setSearchDate] = useState(new Date().toISOString().split('T')[0]);
   const [startTime, setStartTime] = useState('14:00');
   const [endTime, setEndTime] = useState('16:00');
+
+  // My Group state (C20)
+  const [batchesAndGroups, setBatchesAndGroups] = useState([]);
+  const [selectedBatch, setSelectedBatch] = useState(() => {
+    return parseInt(localStorage.getItem('freeroom_student_batch') || '2029', 10);
+  });
+  const [selectedGroup, setSelectedGroup] = useState(() => {
+    return localStorage.getItem('freeroom_student_group') || 'Group A';
+  });
+  const [groupDate, setGroupDate] = useState(new Date().toISOString().split('T')[0]);
+  const [groupSchedule, setGroupSchedule] = useState(null);
+  const [groupLoading, setGroupLoading] = useState(false);
+
+  useEffect(() => {
+    roomsAPI.getBatchesAndGroups().then((res) => {
+      setBatchesAndGroups(res.data.batches || []);
+    }).catch(console.error);
+  }, []);
+
+  const fetchGroupSchedule = useCallback(async () => {
+    setGroupLoading(true);
+    try {
+      const res = await roomsAPI.getMyGroup({
+        batchYear: selectedBatch,
+        group: selectedGroup,
+        date: groupDate,
+        buildingId: 1,
+      });
+      setGroupSchedule(res.data);
+      localStorage.setItem('freeroom_student_batch', String(selectedBatch));
+      localStorage.setItem('freeroom_student_group', selectedGroup);
+    } catch (err) {
+      console.error('Failed to load group schedule:', err);
+      toast.error('Failed to load group schedule');
+    } finally {
+      setGroupLoading(false);
+    }
+  }, [selectedBatch, selectedGroup, groupDate]);
+
+  useEffect(() => {
+    if (mode === 'group') {
+      fetchGroupSchedule();
+    }
+  }, [mode, fetchGroupSchedule]);
 
   // Free-now query
   const fetchFreeNow = useCallback(async () => {
@@ -199,8 +244,8 @@ export default function DashboardPage() {
           <div className="stat-label">Rooms Available</div>
         </div>
         <div className="stat-card">
-          <div className="stat-value">{mode === 'now' ? `${minDuration}m` : 'Window'}</div>
-          <div className="stat-label">{mode === 'now' ? 'Min Duration' : 'Custom Slot'}</div>
+          <div className="stat-value">{mode === 'now' ? `${minDuration}m` : mode === 'window' ? 'Window' : 'Cohort'}</div>
+          <div className="stat-label">{mode === 'now' ? 'Min Duration' : mode === 'window' ? 'Custom Slot' : `Batch ${selectedBatch}`}</div>
         </div>
         <div className="stat-card">
           <div className="stat-value">
@@ -227,6 +272,14 @@ export default function DashboardPage() {
         >
           <HiOutlineCalendar size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
           Search Future Window
+        </button>
+        <button
+          className={`search-tab ${mode === 'group' ? 'search-tab-active' : ''}`}
+          onClick={() => setMode('group')}
+          id="tab-my-group"
+        >
+          <HiOutlineUserGroup size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+          My Group Schedule
         </button>
       </div>
 
@@ -338,6 +391,7 @@ export default function DashboardPage() {
       )}
 
       {/* Controls Toolbar: Floor Filter Chips + Search Input + Refresh */}
+      {mode !== 'group' && (
       <div className="controls-toolbar">
         <div className="filter-bar" style={{ marginBottom: 0 }}>
           {FLOOR_OPTIONS.map((f) => (
@@ -376,8 +430,226 @@ export default function DashboardPage() {
           />
         </div>
       </div>
+      )}
+
+      {/* C20: My Group Controls & Schedule View */}
+      {mode === 'group' && (
+        <div className="fade-in" style={{ marginBottom: 28 }}>
+          <div className="card" style={{ padding: '20px 24px', marginBottom: 24 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-end' }}>
+              <div className="input-group" style={{ minWidth: 160 }}>
+                <label className="input-label">Batch</label>
+                <select
+                  className="input-field"
+                  value={selectedBatch}
+                  onChange={(e) => setSelectedBatch(parseInt(e.target.value, 10))}
+                  id="group-select-batch"
+                >
+                  {batchesAndGroups.length > 0 ? (
+                    batchesAndGroups.map((b) => (
+                      <option key={b.batchYear} value={b.batchYear}>
+                        Batch {b.batchYear}
+                      </option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="2029">Batch 2029</option>
+                      <option value="2028">Batch 2028</option>
+                    </>
+                  )}
+                </select>
+              </div>
+
+              <div className="input-group" style={{ minWidth: 160 }}>
+                <label className="input-label">Group</label>
+                <select
+                  className="input-field"
+                  value={selectedGroup}
+                  onChange={(e) => setSelectedGroup(e.target.value)}
+                  id="group-select-group"
+                >
+                  {(() => {
+                    const currentBatchObj = batchesAndGroups.find((b) => b.batchYear === selectedBatch);
+                    const groupOptions = currentBatchObj?.groups?.length
+                      ? currentBatchObj.groups
+                      : selectedBatch === 2028 ? ['Group A', 'Group B'] : ['Group A', 'Group B', 'Group C'];
+                    return groupOptions.map((g) => (
+                      <option key={g} value={g}>{g}</option>
+                    ));
+                  })()}
+                </select>
+              </div>
+
+              <div className="input-group" style={{ minWidth: 160 }}>
+                <label className="input-label">Date</label>
+                <input
+                  type="date"
+                  className="input-field"
+                  value={groupDate}
+                  onChange={(e) => setGroupDate(e.target.value)}
+                  id="group-select-date"
+                />
+              </div>
+
+              <button
+                className="btn btn-primary"
+                onClick={fetchGroupSchedule}
+                disabled={groupLoading}
+                id="group-refresh-btn"
+                style={{ height: 42 }}
+              >
+                <HiOutlineRefresh size={16} className={groupLoading ? 'spinning' : ''} />
+                {groupLoading ? 'Updating...' : 'Show Schedule'}
+              </button>
+            </div>
+          </div>
+
+          {groupLoading ? (
+            <div className="loading-spinner">
+              <div className="spinner" />
+            </div>
+          ) : !groupSchedule ? null : groupSchedule.status === 'unknown' ? (
+            <div className="card fade-in" style={{ borderColor: 'var(--accent-warning, #f59e0b)', padding: 24 }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <span style={{ fontSize: '1.75rem' }}>⚠️</span>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: '1.05rem', color: 'var(--text-primary)' }}>
+                    Schedule unknown for this date
+                  </div>
+                  <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                    {groupSchedule.reason || `No active term found covering ${groupDate} for Batch ${selectedBatch}.`}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : groupSchedule.is_no_class_day ? (
+            <div className="card fade-in" style={{ borderColor: 'var(--accent-success, #10b981)', padding: 24, background: 'rgba(16, 185, 129, 0.08)' }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <span style={{ fontSize: '1.75rem' }}>🏖️</span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--accent-success)' }}>
+                    Holiday / Break: {groupSchedule.no_class_reason}
+                  </div>
+                  <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                    No timetable classes scheduled for Batch {selectedBatch} on this day. Classrooms remain open and free for self-study!
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : groupSchedule.classes.length === 0 ? (
+            <div className="empty-state fade-in">
+              <div className="empty-state-icon">🎉</div>
+              <div className="empty-state-title">No classes scheduled</div>
+              <div className="empty-state-text">
+                {selectedGroup} has no classes on {groupSchedule.day_of_week} ({groupDate}). All classrooms are open for your use!
+              </div>
+            </div>
+          ) : (
+            <div className="group-timeline">
+              <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--text-primary)' }}>
+                  {groupSchedule.day_of_week} Schedule • {selectedGroup} (Batch {selectedBatch})
+                </span>
+                <span className="badge badge-primary">
+                  {groupSchedule.classes_count} class{groupSchedule.classes_count !== 1 ? 'es' : ''} • {groupSchedule.gaps_count} break{groupSchedule.gaps_count !== 1 ? 's' : ''}
+                </span>
+              </div>
+
+              {groupSchedule.classes.map((cls, idx) => {
+                const gapAfter = groupSchedule.gaps.find((g) => g.start === cls.end_time);
+
+                return (
+                  <div key={cls.id || idx}>
+                    {/* Class Card */}
+                    <div className="card" style={{ padding: '16px 20px', marginBottom: gapAfter ? 12 : 16, borderLeft: '4px solid var(--primary)' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+                        <div>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--text-primary)' }}>
+                              {cls.subject}
+                            </span>
+                            <span className={`badge badge-${cls.entry_type || 'lecture'}`}>
+                              {cls.entry_type || 'Lecture'}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                            <span>🏛️ Room {cls.room_name} ({cls.floor} Floor)</span>
+                            {cls.instructor && <span>👨‍🏫 {cls.instructor}</span>}
+                            {cls.groups?.length > 0 && <span>👥 {cls.groups.join(', ')}</span>}
+                          </div>
+                        </div>
+
+                        <div style={{ textAlign: 'right' }}>
+                          <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--primary)' }}>
+                            {cls.start_time} – {cls.end_time}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Gap / Break with Free Rooms */}
+                    {gapAfter && (
+                      <div
+                        className="card fade-in"
+                        style={{
+                          padding: '16px 20px',
+                          marginBottom: 16,
+                          background: 'rgba(56, 189, 248, 0.06)',
+                          borderColor: 'rgba(56, 189, 248, 0.3)',
+                          borderLeft: '4px solid #38bdf8',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontSize: '1.25rem' }}>☕</span>
+                            <span style={{ fontWeight: 700, color: '#38bdf8', fontSize: '0.96rem' }}>
+                              Break: {gapAfter.start} – {gapAfter.end} ({gapAfter.duration_minutes} mins)
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '0.84rem', color: 'var(--text-secondary)' }}>
+                            {gapAfter.free_rooms_count} classroom{gapAfter.free_rooms_count !== 1 ? 's' : ''} free during this gap
+                          </span>
+                        </div>
+
+                        {gapAfter.free_rooms.length > 0 ? (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                            {gapAfter.free_rooms.map((r) => (
+                              <button
+                                key={r.id}
+                                className="filter-chip"
+                                onClick={() => navigate(`/room/${r.id}`)}
+                                style={{
+                                  background: 'var(--bg-card)',
+                                  borderColor: 'var(--accent-success)',
+                                  color: 'var(--text-primary)',
+                                  cursor: 'pointer',
+                                  fontSize: '0.84rem',
+                                  padding: '4px 10px',
+                                }}
+                                title="Click to view full room timeline"
+                              >
+                                🟢 <strong>Room {r.name}</strong> ({r.floor} Fl • {r.capacity} seats)
+                              </button>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                            No empty rooms available during this interval.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Room List Header */}
+      {mode !== 'group' && (
+      <>
       <div className="room-list-header">
         <span className="room-list-title">
           {mode === 'now' ? 'Available Classrooms' : 'Matching Classrooms'}
@@ -444,6 +716,8 @@ export default function DashboardPage() {
             ))}
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

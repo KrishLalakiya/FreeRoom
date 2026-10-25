@@ -53,6 +53,12 @@ export const roomsAPI = {
 
   list: (buildingId = 1) =>
     api.get('/rooms', { params: { buildingId } }),
+
+  getBatchesAndGroups: () =>
+    api.get('/rooms/batches-and-groups'),
+
+  getMyGroup: (params) =>
+    api.get('/rooms/my-group', { params }),
 };
 
 // ── Reports ─────────────────────────────────────────────
