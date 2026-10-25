@@ -186,3 +186,85 @@ describe('Timetable upload batch and term association (C4)', () => {
     expect(entry.valid_from).toBe('2026-08-01');
   });
 });
+
+describe('Cross-batch checks and club deduplication (C22)', () => {
+  function evaluateClash(existingEntry, newEntry, currentBatchId) {
+    const isSameRoomAndDay = existingEntry.room_id === newEntry.room_id && existingEntry.day_of_week === newEntry.day_of_week;
+    const isTimeOverlap = existingEntry.start < newEntry.end && existingEntry.end > newEntry.start;
+
+    if (!isSameRoomAndDay || !isTimeOverlap) {
+      return { status: 'ok' };
+    }
+
+    // Club deduplication
+    if (newEntry.entry_type === 'club' && existingEntry.entry_type === 'club') {
+      return { status: 'club_duplicate', deduplicated: true };
+    }
+
+    // Cross-batch overlap: different batch_id is a warning
+    if (existingEntry.batch_id && currentBatchId && existingEntry.batch_id !== currentBatchId) {
+      return { status: 'warning', message: `Cross-batch overlap with Batch ${existingEntry.batch_year}` };
+    }
+
+    // Same batch clash: error
+    return { status: 'error', message: 'Time clash' };
+  }
+
+  const existing2028 = {
+    room_id: 1,
+    day_of_week: 1,
+    start: '10:00',
+    end: '12:00',
+    batch_id: 2,
+    batch_year: 2028,
+    entry_type: 'class',
+  };
+
+  const existingClub = {
+    room_id: 6, // Classroom C ground
+    day_of_week: 1,
+    start: '17:30',
+    end: '20:00',
+    batch_id: 2,
+    batch_year: 2028,
+    entry_type: 'club',
+  };
+
+  it('overlapping classes from DIFFERENT batches become warnings, not errors', () => {
+    const new2029Class = {
+      room_id: 1,
+      day_of_week: 1,
+      start: '11:00',
+      end: '13:00',
+      entry_type: 'class',
+    };
+    const result = evaluateClash(existing2028, new2029Class, 1); // 1 = Batch 2029
+    expect(result.status).toBe('warning');
+    expect(result.message).toContain('Batch 2028');
+  });
+
+  it('overlapping classes from the SAME batch are errors', () => {
+    const new2028Class = {
+      room_id: 1,
+      day_of_week: 1,
+      start: '11:00',
+      end: '13:00',
+      entry_type: 'class',
+    };
+    const result = evaluateClash(existing2028, new2028Class, 2); // 2 = Batch 2028
+    expect(result.status).toBe('error');
+  });
+
+  it('identical club events appearing in multiple sheets are deduplicated', () => {
+    const new2029Club = {
+      room_id: 6,
+      day_of_week: 1,
+      start: '17:30',
+      end: '20:00',
+      entry_type: 'club',
+    };
+    const result = evaluateClash(existingClub, new2029Club, 1);
+    expect(result.status).toBe('club_duplicate');
+    expect(result.deduplicated).toBe(true);
+  });
+});

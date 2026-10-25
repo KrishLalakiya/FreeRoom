@@ -644,11 +644,30 @@ export async function importTimetable({
       return [...ids];
     };
 
+    let batchId = null;
+    let batchYear = null;
+    if (termId) {
+      const termRes = await client.query(
+        `SELECT t.batch_id, b.year as batch_year
+         FROM terms t
+         JOIN batches b ON b.id = t.batch_id
+         WHERE t.id = $1`,
+        [termId]
+      );
+      if (termRes.rows.length > 0) {
+        batchId = termRes.rows[0].batch_id;
+        batchYear = termRes.rows[0].batch_year;
+      }
+    }
+
     const existingRes = await client.query(
       `SELECT te.id, te.room_id, te.course_name, te.teacher, te.day_of_week,
-              te.start_time, te.end_time
+              te.start_time, te.end_time, te.entry_type, te.term_id, t.batch_id,
+              b.year as batch_year
        FROM timetable_entries te
        JOIN rooms r ON r.id = te.room_id
+       LEFT JOIN terms t ON te.term_id = t.id
+       LEFT JOIN batches b ON t.batch_id = b.id
        WHERE r.building_id = $1
          AND te.valid_from <= $3
          AND te.valid_to >= $2`,
@@ -662,9 +681,13 @@ export async function importTimetable({
       day_of_week: row.day_of_week,
       start: String(row.start_time).slice(0, 5),
       end: String(row.end_time).slice(0, 5),
+      entry_type: row.entry_type || 'class',
+      batch_id: row.batch_id,
+      batch_year: row.batch_year,
     }));
 
     const accepted = [];
+    const warnings = [];
     let duplicates = 0;
 
     for (const cls of parsed.classes) {
@@ -690,7 +713,31 @@ export async function importTimetable({
         continue;
       }
 
-            const candidate = {
+      const targetRooms = new Set(relatedRoomIds(roomId));
+
+      // Club deduplication (C22): same club event appearing in two sheets is saved once
+      if (cls.entryType === 'club') {
+        const isClubDup = existing.some(
+          (row) =>
+            targetRooms.has(row.room_id) &&
+            row.day_of_week === cls.dayOfWeek &&
+            timesOverlap(cls.startTime, cls.endTime, row.start, row.end) &&
+            (row.entry_type === 'club' || row.course.includes('club'))
+        ) || accepted.some(
+          (row) =>
+            targetRooms.has(row.room_id) &&
+            row.day_of_week === cls.dayOfWeek &&
+            timesOverlap(cls.startTime, cls.endTime, row.start, row.end) &&
+            (row.entry_type === 'club' || row.course.includes('club'))
+        );
+
+        if (isClubDup) {
+          duplicates += 1;
+          continue;
+        }
+      }
+
+      const candidate = {
         room_id: roomId,
         course: cls.course.toLowerCase().trim(),
         teacher: (cls.teacher || '').toLowerCase().trim(),
@@ -707,15 +754,7 @@ export async function importTimetable({
         continue;
       }
 
-      const targetRooms = new Set(relatedRoomIds(roomId));
-
-      const clashesWithExisting = existing.some(
-        (row) =>
-          targetRooms.has(row.room_id) &&
-          row.day_of_week === cls.dayOfWeek &&
-          timesOverlap(cls.startTime, cls.endTime, row.start, row.end)
-      );
-
+      // Check clashes within current upload
       const clashesWithinUpload = accepted.some(
         (row) =>
           targetRooms.has(row.room_id) &&
@@ -723,13 +762,46 @@ export async function importTimetable({
           timesOverlap(cls.startTime, cls.endTime, row.start, row.end)
       );
 
-      if (clashesWithExisting || clashesWithinUpload) {
+      if (clashesWithinUpload) {
         errors.push({
           sheetRow: cls.sheetRow,
           dayOfWeek: cls.dayOfWeek,
           value: cls.raw,
           reason: `Time clash in room ${roomsById.get(roomId).name} on day ${cls.dayOfWeek} ${cls.startTime}-${cls.endTime}.`,
         });
+        continue;
+      }
+
+      // Check clashes with existing entries: cross-batch overlap becomes warning per C22
+      const clashingExisting = existing.filter(
+        (row) =>
+          targetRooms.has(row.room_id) &&
+          row.day_of_week === cls.dayOfWeek &&
+          timesOverlap(cls.startTime, cls.endTime, row.start, row.end)
+      );
+
+      let hasSameBatchClash = false;
+      for (const clash of clashingExisting) {
+        const isCrossBatch = clash.batch_id && batchId && clash.batch_id !== batchId;
+        if (isCrossBatch) {
+          warnings.push({
+            sheetRow: cls.sheetRow,
+            dayOfWeek: cls.dayOfWeek,
+            value: cls.raw,
+            reason: `Cross-batch overlap warning: class overlaps with Batch ${clash.batch_year} in room ${roomsById.get(roomId).name} on day ${cls.dayOfWeek} (${clash.start}-${clash.end}). Proceeding with upload per C22.`,
+          });
+        } else {
+          hasSameBatchClash = true;
+          errors.push({
+            sheetRow: cls.sheetRow,
+            dayOfWeek: cls.dayOfWeek,
+            value: cls.raw,
+            reason: `Time clash in room ${roomsById.get(roomId).name} on day ${cls.dayOfWeek} ${cls.startTime}-${cls.endTime}.`,
+          });
+        }
+      }
+
+      if (hasSameBatchClash) {
         continue;
       }
 
@@ -753,18 +825,11 @@ export async function importTimetable({
         parsedCount: parsed.classes.length,
         savedCount: 0,
         duplicateCount: duplicates,
-        errors: [...parsed.warnings, ...errors],
+        errors,
+        warnings: [...parsed.warnings, ...warnings],
         unmappedRooms: [...unmapped.values()],
         message: 'Upload rejected because some rows were invalid. Nothing was saved.',
       };
-    }
-
-    let batchId = null;
-    if (termId) {
-      const termRes = await client.query('SELECT batch_id FROM terms WHERE id = $1', [termId]);
-      if (termRes.rows.length > 0) {
-        batchId = termRes.rows[0].batch_id;
-      }
     }
 
     let savedCount = 0;
@@ -879,7 +944,8 @@ export async function importTimetable({
       parsedCount: parsed.classes.length,
       savedCount,
       duplicateCount: duplicates,
-      errors: [...parsed.warnings, ...errors],
+      errors,
+      warnings: [...parsed.warnings, ...warnings],
       unmappedRooms: [...unmapped.values()],
       message:
         errors.length > 0
