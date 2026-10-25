@@ -296,6 +296,16 @@ body::before {
 .card-free::before { background: var(--accent-success); }
 .card-free:hover { border-color: var(--border-success); box-shadow: var(--shadow-success-glow); }
 .card-busy::before { background: var(--text-muted); }
+.card-closed {
+  opacity: 0.72;
+  border-color: rgba(239, 68, 68, 0.35);
+  background: var(--bg-card);
+}
+.card-closed:hover {
+  opacity: 0.95;
+  border-color: var(--accent-danger);
+}
+.card-closed::before { background: var(--accent-danger); }
 
 /* ── Room card ─────────────────────────────────────────── */
 .room-card {
@@ -349,6 +359,7 @@ body::before {
 }
 .badge-dividable { color: var(--accent-info); border-color: var(--accent-info); background: var(--accent-info-bg); }
 .badge-split { color: var(--accent-warning); border-color: var(--accent-warning); background: var(--accent-warning-bg); }
+.badge-closed { color: var(--accent-danger); border-color: var(--accent-danger); background: rgba(239, 68, 68, 0.12); }
 
 /* ── Status badges ─────────────────────────────────────── */
 .status-badge {
@@ -366,6 +377,7 @@ body::before {
 
 .status-free { color: var(--accent-success); background: var(--accent-success-bg); border-color: var(--border-success); }
 .status-busy { color: var(--text-secondary); background: rgba(138, 129, 114, 0.1); border-color: var(--border-color); }
+.status-closed { color: var(--accent-danger); background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.35); }
 .status-unknown { color: var(--accent-warning); background: var(--accent-warning-bg); border-color: rgba(176, 125, 34, 0.3); }
 
 .status-dot {
@@ -376,6 +388,7 @@ body::before {
 }
 .status-dot-free { animation: pulse 2.4s ease-in-out infinite; }
 .status-dot-busy { opacity: 0.6; }
+.status-dot-closed { background: var(--accent-danger); box-shadow: 0 0 6px rgba(239, 68, 68, 0.5); }
 
 /* ── Room card info ────────────────────────────────────── */
 .room-card-info {
@@ -559,7 +572,16 @@ select.input-field { cursor: pointer; }
   background: var(--text-muted);
 }
 .timeline-dot-free { background: var(--accent-success); }
-.timeline-dot-busy { background: var(--accent-danger); }
+.timeline-dot-busy { background: var(--text-muted); }
+.timeline-dot-closed { background: var(--accent-danger); box-shadow: 0 0 8px rgba(239, 68, 68, 0.45); }
+
+.timeline-item-closed {
+  background: rgba(239, 68, 68, 0.05);
+  border-left: 2px solid var(--accent-danger);
+  border-radius: var(--radius-sm);
+  padding-right: 12px;
+  margin-bottom: 6px;
+}
 
 .timeline-time {
   font-family: var(--font-display);
@@ -928,7 +950,8 @@ select.input-field { cursor: pointer; }
 .timeline-segment { height: 100%; transition: opacity var(--transition-fast); }
 .timeline-segment:hover { opacity: 0.75; }
 .timeline-segment-free { background: var(--accent-success); }
-.timeline-segment-busy { background: var(--accent-danger); }
+.timeline-segment-busy { background: #64748b; }
+.timeline-segment-closed { background: var(--accent-danger); }
 
 .timeline-hours-axis {
   display: flex;

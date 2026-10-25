@@ -87,13 +87,13 @@ export default function RoomDetailPage() {
     return buildTimelineItems(timeline);
   }, [timeline]);
 
-  // Compute visual bar segments (9:00 AM to 8:00 PM)
+  // Compute visual bar segments (06:00 AM to 10:00 PM)
   const visualSegments = useMemo(() => {
     if (!timeline || !timeline.busy_blocks || !timeline.free_intervals) return [];
 
     const dateStr = selectedDate;
-    const dayStart = new Date(`${dateStr}T${timeline.opening_time || '09:00'}:00`);
-    const dayEnd = new Date(`${dateStr}T${timeline.closing_time || '20:00'}:00`);
+    const dayStart = new Date(`${dateStr}T${timeline.opening_time || '06:00'}:00`);
+    const dayEnd = new Date(`${dateStr}T${timeline.closing_time || '22:00'}:00`);
     const totalMs = dayEnd - dayStart;
 
     if (totalMs <= 0) return [];
@@ -110,6 +110,8 @@ export default function RoomDetailPage() {
         const widthPercent = ((boundedEnd - boundedStart) / totalMs) * 100;
         segments.push({
           ...item,
+          is_closure: !!item.is_closure,
+          reason: item.reason,
           widthPercent,
           formattedStart: formatTime(start),
           formattedEnd: formatTime(end),
@@ -146,13 +148,14 @@ export default function RoomDetailPage() {
   }
 
   const isFree = timeline.status === 'free';
+  const isClosed = timeline.status === 'closed';
   const statusMeta =
     {
       free: { label: 'Free Now', className: 'status-free', dot: 'status-dot-free' },
       busy: { label: 'Occupied Now', className: 'status-busy', dot: 'status-dot-busy' },
       scheduled: { label: 'Scheduled', className: 'status-free', dot: 'status-dot-free' },
-      closed: { label: 'Campus Closed', className: 'status-busy', dot: 'status-dot-busy' },
-      unknown: { label: 'Schedule Unknown', className: 'status-busy', dot: 'status-dot-busy' },
+      closed: { label: `Closed (${timeline.reason || 'Exam'})`, className: 'status-closed', dot: 'status-dot-closed' },
+      unknown: { label: 'Schedule Unknown', className: 'status-unknown', dot: 'status-dot-busy' },
     }[timeline.status] || { label: 'Unknown', className: 'status-busy', dot: 'status-dot-busy' };
   const isDividable = timeline.name === '2B';
   const isSplit = timeline.name === '2B1' || timeline.name === '2B2' || !!timeline.parent_room_id;
@@ -171,7 +174,7 @@ export default function RoomDetailPage() {
           {/* ── Left Sidebar (Sticky on Tablet & PC) ──────────────── */}
           <div className="room-detail-sidebar">
             {/* Room Main Card */}
-            <div className={`card ${isFree ? 'card-free' : 'card-busy'}`} style={{ marginBottom: 20 }}>
+            <div className={`card ${isClosed ? 'card-closed' : isFree ? 'card-free' : 'card-busy'}`} style={{ marginBottom: 20 }}>
               <div className="room-card-header">
                 <div>
                   <div className="room-card-name" style={{ fontSize: '1.6rem' }}>
@@ -215,6 +218,11 @@ export default function RoomDetailPage() {
               {isFree && timeline.free_until && (
                 <div className="free-until-text" style={{ fontSize: '1rem', marginTop: 12 }}>
                   Free until <span className="free-until-time" style={{ fontSize: '1.15rem' }}>{formatTime(timeline.free_until)}</span>
+                </div>
+              )}
+              {isClosed && (
+                <div className="free-until-text" style={{ fontSize: '1rem', marginTop: 12, color: 'var(--accent-danger)', fontWeight: 600 }}>
+                  🚫 Closed for {timeline.reason || 'Exam'}{timeline.closed_until ? ` until ${formatTime(timeline.closed_until)}` : ' today'}
                 </div>
               )}
 
@@ -285,15 +293,33 @@ export default function RoomDetailPage() {
 
           {/* ── Right Column: Interactive Schedule & Timeline ────── */}
           <div className="room-detail-main">
-            {(timeline.status === 'unknown' || timeline.status === 'closed') && (
-              <div className="card" style={{ marginBottom: 20, borderColor: 'var(--accent-danger)' }}>
+            {timeline.status === 'closed' && (
+              <div className="card fade-in" style={{
+                marginBottom: 20,
+                borderColor: 'var(--accent-danger)',
+                background: 'rgba(239, 68, 68, 0.12)',
+                padding: '16px 20px',
+              }}>
+                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <span style={{ fontSize: '1.6rem', lineHeight: 1 }}>🚫</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--accent-danger)', marginBottom: 2 }}>
+                      Closed for {timeline.reason || 'Exam'}{timeline.closed_until ? ` until ${formatTime(timeline.closed_until)}` : ' today'}
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                      {timeline.closure_note || 'This classroom is reserved for examinations or an administrative closure. Continuous study is unavailable.'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            {timeline.status === 'unknown' && (
+              <div className="card" style={{ marginBottom: 20, borderColor: 'var(--accent-warning, #f59e0b)' }}>
                 <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
-                  {timeline.status === 'closed' ? 'Campus closed' : 'Availability unknown'}
+                  Availability unknown
                 </div>
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                  {timeline.status === 'closed'
-                    ? 'This day is a closed day, so no free intervals are shown.'
-                    : timeline.coverage?.valid_from
+                  {timeline.coverage?.valid_from
                     ? `The timetable only covers ${timeline.coverage.valid_from} to ${timeline.coverage.valid_to}. This room is not assumed free outside that range.`
                     : 'No timetable has been uploaded for this building yet.'}
                 </div>
@@ -310,8 +336,12 @@ export default function RoomDetailPage() {
                     <span>Free</span>
                   </div>
                   <div className="legend-item">
-                    <span className="legend-color" style={{ background: '#ef4444' }} />
+                    <span className="legend-color" style={{ background: '#64748b' }} />
                     <span>Occupied</span>
+                  </div>
+                  <div className="legend-item">
+                    <span className="legend-color" style={{ background: '#ef4444' }} />
+                    <span>Closed (Exam)</span>
                   </div>
                 </div>
               </div>
@@ -321,20 +351,35 @@ export default function RoomDetailPage() {
                 {visualSegments.map((seg, i) => (
                   <div
                     key={i}
-                    className={`timeline-segment ${seg.type === 'free' ? 'timeline-segment-free' : 'timeline-segment-busy'}`}
-                    style={{ width: `${seg.widthPercent}%` }}
-                    title={`${seg.type === 'free' ? 'Free' : seg.title || 'Occupied'}: ${seg.formattedStart} - ${seg.formattedEnd}`}
+                    className={`timeline-segment ${
+                      seg.is_closure
+                        ? 'timeline-segment-closed'
+                        : seg.type === 'free'
+                        ? 'timeline-segment-free'
+                        : 'timeline-segment-busy'
+                    }`}
+                    style={{
+                      width: `${seg.widthPercent}%`,
+                      ...(seg.is_closure ? { background: '#ef4444' } : {}),
+                    }}
+                    title={`${
+                      seg.is_closure
+                        ? `Closed for ${seg.reason || 'Exam'}`
+                        : seg.type === 'free'
+                        ? 'Free'
+                        : seg.title || 'Occupied'
+                    }: ${seg.formattedStart} - ${seg.formattedEnd}`}
                   />
                 ))}
               </div>
 
-              {/* Hours Axis */}
+              {/* Hours Axis (6 AM to 10 PM) */}
               <div className="timeline-hours-axis">
-                <span>9 AM</span>
-                <span>12 PM</span>
-                <span>3 PM</span>
+                <span>6 AM</span>
+                <span>10 AM</span>
+                <span>2 PM</span>
                 <span>6 PM</span>
-                <span>8 PM</span>
+                <span>10 PM</span>
               </div>
             </div>
 
@@ -348,20 +393,41 @@ export default function RoomDetailPage() {
 
             <div className="timeline">
               {timelineItems.map((item, i) => (
-                <div key={i} className="timeline-item slide-in" style={{ animationDelay: `${i * 0.04}s` }}>
-                  <div className={`timeline-dot ${item.type === 'free' ? 'timeline-dot-free' : 'timeline-dot-busy'}`} />
+                <div
+                  key={i}
+                  className={`timeline-item ${item.is_closure ? 'timeline-item-closed' : ''} slide-in`}
+                  style={{ animationDelay: `${i * 0.04}s` }}
+                >
+                  <div
+                    className={`timeline-dot ${
+                      item.is_closure
+                        ? 'timeline-dot-closed'
+                        : item.type === 'free'
+                        ? 'timeline-dot-free'
+                        : 'timeline-dot-busy'
+                    }`}
+                  />
                   <div className="timeline-time">
                     {formatTime(item.start)} — {formatTime(item.end)}
                   </div>
                   <div className="timeline-title">
-                    {item.type === 'free' ? '🟢 Available for Study' : item.title || 'Occupied Block'}
+                    {item.is_closure
+                      ? `🚫 ${item.reason || 'Exam'} (Room Closed)`
+                      : item.type === 'free'
+                      ? '🟢 Available for Study'
+                      : item.title || 'Occupied Block'}
                   </div>
                   {item.type === 'free' && (
                     <div className="timeline-subtitle" style={{ color: 'var(--accent-success)' }}>
                       {Math.round((new Date(item.end) - new Date(item.start)) / 60000)} minutes continuous study time
                     </div>
                   )}
-                  {item.type !== 'free' && (
+                  {item.is_closure && (
+                    <div className="timeline-subtitle" style={{ color: 'var(--accent-danger)' }}>
+                      Closed for {item.reason || 'Exam'}{item.scope ? ` (${item.scope} closure)` : ''}{item.note ? ` · ${item.note}` : ''}
+                    </div>
+                  )}
+                  {!item.is_closure && item.type !== 'free' && (
                     <div className="timeline-subtitle">
                       {item.teacher ? `Instructor: ${item.teacher}` : 'Class / Campus Event'}
                       {item.group ? ` · ${item.group}` : ''}
@@ -391,12 +457,16 @@ function buildTimelineItems(timeline) {
   if (timeline.busy_blocks) {
     for (const block of timeline.busy_blocks) {
       items.push({
-        type: 'busy',
+        type: block.is_closure ? 'closure' : 'busy',
         start: block.start,
         end: block.end,
         title: block.title,
         teacher: block.teacher,
         group: block.group,
+        is_closure: !!block.is_closure,
+        reason: block.reason || null,
+        scope: block.scope || null,
+        note: block.note || null,
       });
     }
   }

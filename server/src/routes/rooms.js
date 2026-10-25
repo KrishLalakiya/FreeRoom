@@ -38,9 +38,12 @@ router.get('/free-now', authenticate, async (req, res) => {
       query: { buildingId, minDuration, floor, timestamp: now.toISOString() },
       status: result.status,
       reason: result.reason,
+      note: result.note || null,
+      building_closure: result.building_closure || null,
       coverage: result.coverage,
       count: result.rooms.length,
       rooms: result.rooms,
+      closed_rooms: result.closed_rooms || [],
     });
   } catch (err) {
     console.error('Free-now error:', err);
@@ -117,9 +120,12 @@ router.get('/free-window', authenticate, async (req, res) => {
       query: { buildingId, date, startTime, endTime, floor, capacity },
       status: result.status,
       reason: result.reason,
+      note: result.note || null,
+      building_closure: result.building_closure || null,
       coverage: result.coverage,
       count: result.rooms.length,
       rooms: result.rooms,
+      closed_rooms: result.closed_rooms || [],
     });
   } catch (err) {
     console.error('Free-window error:', err);

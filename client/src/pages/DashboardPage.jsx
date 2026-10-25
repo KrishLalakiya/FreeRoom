@@ -22,9 +22,12 @@ export default function DashboardPage() {
   // State
   const [mode, setMode] = useState('now'); // 'now' or 'window'
   const [rooms, setRooms] = useState([]);
+  const [closedRooms, setClosedRooms] = useState([]);
+  const [buildingClosure, setBuildingClosure] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [scheduleStatus, setScheduleStatus] = useState('ok');
+  const [scheduleReason, setScheduleReason] = useState(null);
   const [coverage, setCoverage] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [capacityFilter, setCapacityFilter] = useState('all');
@@ -52,7 +55,10 @@ export default function DashboardPage() {
 
       const res = await roomsAPI.getFreeNow(params);
       setRooms(res.data.rooms || []);
+      setClosedRooms(res.data.closed_rooms || []);
+      setBuildingClosure(res.data.building_closure || null);
       setScheduleStatus(res.data.status || 'ok');
+      setScheduleReason(res.data.reason || null);
       setCoverage(res.data.coverage || null);
       setLastUpdated(new Date());
     } catch (err) {
@@ -88,7 +94,10 @@ export default function DashboardPage() {
 
       const res = await roomsAPI.getFreeWindow(params);
       setRooms(res.data.rooms || []);
+      setClosedRooms(res.data.closed_rooms || []);
+      setBuildingClosure(res.data.building_closure || null);
       setScheduleStatus(res.data.status || 'ok');
+      setScheduleReason(res.data.reason || null);
       setCoverage(res.data.coverage || null);
       setLastUpdated(new Date());
     } catch (err) {
@@ -142,6 +151,25 @@ export default function DashboardPage() {
       return true;
     });
   }, [rooms, searchQuery, capacityFilter]);
+
+  // Filtered closed rooms (never in free list)
+  const filteredClosedRooms = useMemo(() => {
+    return closedRooms.filter((r) => {
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchesName = r.name.toLowerCase().includes(q);
+        const matchesFloor = r.floor.toLowerCase().includes(q);
+        const matchesBuilding = r.building_name?.toLowerCase().includes(q);
+        if (!matchesName && !matchesFloor && !matchesBuilding) return false;
+      }
+
+      if (selectedFloor !== 'All' && r.floor !== selectedFloor) return false;
+      if (capacityFilter === '60' && (r.capacity || 0) < 60) return false;
+      if (capacityFilter === '100' && (r.capacity || 0) < 100) return false;
+
+      return true;
+    });
+  }, [closedRooms, searchQuery, selectedFloor, capacityFilter]);
 
   const firstName = user?.name?.split(' ')[0] || 'there';
   const greeting = getGreeting();
@@ -202,18 +230,39 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {scheduleStatus !== 'ok' && (
-        <div className="card fade-in" style={{ marginBottom: 20, borderColor: scheduleStatus === 'closed' ? 'var(--accent-danger)' : 'var(--accent-warning, #f59e0b)' }}>
+      {/* C9: Building Closure Banner */}
+      {(buildingClosure || scheduleStatus === 'closed') && (
+        <div className="card fade-in" style={{
+          marginBottom: 20,
+          borderColor: 'var(--accent-danger)',
+          background: 'rgba(239, 68, 68, 0.12)',
+          padding: '16px 20px',
+        }}>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <span style={{ fontSize: '1.75rem', lineHeight: 1 }}>🚫</span>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--accent-danger)', marginBottom: 3 }}>
+                College closed today for exams{buildingClosure?.reason ? `: ${buildingClosure.reason}` : scheduleReason ? `: ${scheduleReason}` : ''}. No rooms available.
+              </div>
+              <div style={{ fontSize: '0.86rem', color: 'var(--text-secondary)' }}>
+                {buildingClosure?.note || 'Administrative exam or building closure active. All classrooms in this building are closed.'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Schedule unknown banner (outside academic term) */}
+      {scheduleStatus === 'unknown' && !buildingClosure && (
+        <div className="card fade-in" style={{ marginBottom: 20, borderColor: 'var(--accent-warning, #f59e0b)' }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-            <span style={{ fontSize: '1.25rem' }}>{scheduleStatus === 'closed' ? '🚫' : '⚠️'}</span>
+            <span style={{ fontSize: '1.25rem' }}>⚠️</span>
             <div>
               <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
-                {scheduleStatus === 'closed' ? 'Campus is closed on this date' : 'Schedule unknown for this date'}
+                Schedule unknown for this date
               </div>
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                {scheduleStatus === 'closed'
-                  ? 'Rooms are not shown as free on a closed day.'
-                  : coverage?.valid_from
+                {coverage?.valid_from
                   ? `The uploaded timetable only covers ${coverage.valid_from} to ${coverage.valid_to}. Rooms are not shown as free outside that range.`
                   : 'No timetable has been uploaded yet. Ask a schedule admin to import the weekly timetable.'}
               </div>
@@ -369,6 +418,31 @@ export default function DashboardPage() {
               staggerIndex={i + 1}
             />
           ))}
+        </div>
+      )}
+
+      {/* Closed Classrooms Section (C9) */}
+      {!loading && filteredClosedRooms.length > 0 && (
+        <div style={{ marginTop: 36 }} className="fade-in">
+          <div className="room-list-header">
+            <span className="room-list-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span>Closed Classrooms</span>
+              <span className="badge badge-closed">{filteredClosedRooms.length}</span>
+            </span>
+            <span className="room-list-count">
+              Exams, floor closures, or administrative holds
+            </span>
+          </div>
+          <div className="room-list">
+            {filteredClosedRooms.map((room, i) => (
+              <RoomCard
+                key={`closed-${room.id}`}
+                room={room}
+                onClick={handleRoomClick}
+                staggerIndex={i + 1}
+              />
+            ))}
+          </div>
         </div>
       )}
     </div>

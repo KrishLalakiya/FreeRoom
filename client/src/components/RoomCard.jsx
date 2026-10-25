@@ -26,16 +26,19 @@ function formatDuration(minutes) {
 }
 
 export default function RoomCard({ room, onClick, staggerIndex = 0 }) {
+  const isClosed = room.status === 'closed';
   const isFree = room.status === 'free' || room.status === 'free_for_window';
-  const maxDuration = 11 * 60; // 11 hours (9 AM to 8 PM)
+  const maxDuration = 16 * 60; // 16 hours (6 AM to 10 PM)
   const fillPercent = Math.min(((room.free_duration || 0) / maxDuration) * 100, 100);
 
   const isDividable = room.name === '2B';
   const isSplit = room.name === '2B1' || room.name === '2B2' || !!room.parent_room_id;
 
+  const cardStyleClass = isClosed ? 'card-closed' : isFree ? 'card-free' : 'card-busy';
+
   return (
     <div
-      className={`card room-card ${isFree ? 'card-free' : 'card-busy'} fade-in stagger-${Math.min(staggerIndex, 6)}`}
+      className={`card room-card ${cardStyleClass} fade-in stagger-${Math.min(staggerIndex, 6)}`}
       onClick={() => onClick?.(room)}
       role="button"
       tabIndex={0}
@@ -66,10 +69,17 @@ export default function RoomCard({ room, onClick, staggerIndex = 0 }) {
             )}
           </div>
           <div className="room-card-status">
-            <span className={`status-badge ${isFree ? 'status-free' : 'status-busy'}`}>
-              <span className={`status-dot ${isFree ? 'status-dot-free' : 'status-dot-busy'}`} />
-              {isFree ? 'Free' : 'Busy'}
-            </span>
+            {isClosed ? (
+              <span className="status-badge status-closed">
+                <span className="status-dot status-dot-closed" />
+                {room.closure_badge || `${room.closure_reason || 'Exam'} — Room Closed`}
+              </span>
+            ) : (
+              <span className={`status-badge ${isFree ? 'status-free' : 'status-busy'}`}>
+                <span className={`status-dot ${isFree ? 'status-dot-free' : 'status-dot-busy'}`} />
+                {isFree ? 'Free' : 'Busy'}
+              </span>
+            )}
           </div>
         </div>
 
@@ -92,7 +102,17 @@ export default function RoomCard({ room, onClick, staggerIndex = 0 }) {
 
       {/* Duration & Availability Footer */}
       <div style={{ marginTop: 14 }}>
-        {isFree && room.free_duration ? (
+        {isClosed ? (
+          <div className="free-until-text" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: 'var(--accent-danger)', fontWeight: 600 }}>
+              🚫 Closed for {room.closure_reason || 'Exam'}
+              {room.closed_until ? ` until ${formatTime(room.closed_until)}` : ''}
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              Details <HiOutlineArrowRight size={12} />
+            </span>
+          </div>
+        ) : isFree && room.free_duration ? (
           <>
             <div className="room-card-duration">
               <HiOutlineClock size={14} style={{ color: 'var(--text-muted)' }} />

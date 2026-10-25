@@ -49,12 +49,66 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
     return { status: 'unknown', reason: 'Outside academic term: no timetable data', rooms: [], coverage };
   }
 
+  // C9: Check for active building closures on this date
+  const buildingClosure = await getActiveBuildingClosure(buildingId, dateStr, now);
+  if (buildingClosure) {
+    const closedRooms = rooms.map((room) => ({
+      ...room,
+      status: 'closed',
+      closure_reason: buildingClosure.reason || 'College closed today for exams',
+      closure_scope: 'building',
+      closure_badge: `${buildingClosure.reason || 'Exam'} — Building Closed`,
+      closure_note: buildingClosure.note || null,
+      closed_until: buildingClosure.end_time ? zonedTimeToUtc(dateStr, String(buildingClosure.end_time).slice(0, 5)) : null,
+      busy_blocks: [],
+    }));
+
+    return {
+      status: 'closed',
+      reason: buildingClosure.reason || 'College closed today for exams',
+      note: buildingClosure.note || null,
+      building_closure: {
+        id: buildingClosure.id,
+        reason: buildingClosure.reason || 'College closed today for exams',
+        note: buildingClosure.note || null,
+        start_date: buildingClosure.start_date,
+        end_date: buildingClosure.end_date,
+        start_time: buildingClosure.start_time,
+        end_time: buildingClosure.end_time,
+      },
+      rooms: [],
+      closed_rooms: closedRooms,
+      coverage,
+    };
+  }
+
   const results = [];
+  const closedResults = [];
 
   for (const room of rooms) {
     const availability = await computeRoomAvailability(room, dateStr, dayOfWeek, building, now);
 
-    if (availability.status === 'free') {
+    if (availability.status === 'closed') {
+      const activeClosure = availability.busy_blocks.find(
+        (b) => b.is_closure && ((now && b.start <= now && b.end > now) || (!now && b.isWholeDay))
+      ) || availability.busy_blocks.find((b) => b.is_closure);
+
+      const closureScope = activeClosure?.scope || (room.parent_room_id ? 'split_room' : 'room');
+      const badge = closureScope === 'floor'
+        ? `${availability.reason || 'Exam'} — ${room.floor} Floor Closed`
+        : `${availability.reason || 'Exam'} — Room Closed`;
+
+      closedResults.push({
+        ...room,
+        status: 'closed',
+        closure_reason: availability.reason || 'Exam',
+        closure_scope: closureScope,
+        closure_badge: badge,
+        closure_note: activeClosure?.note || null,
+        closed_until: activeClosure?.end || null,
+        busy_blocks: availability.busy_blocks,
+      });
+    } else if (availability.status === 'free') {
       const freeMinutes = (availability.free_until - now) / (1000 * 60);
       if (freeMinutes >= minDuration) {
         results.push({
@@ -76,7 +130,7 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
       String(a.name).localeCompare(String(b.name))
   );
 
-  return { status: 'ok', rooms: results, coverage };
+  return { status: 'ok', rooms: results, closed_rooms: closedResults, coverage };
 }
 
 /**
@@ -102,25 +156,80 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
   const windowStart = zonedTimeToUtc(date, startTime);
   const windowEnd = zonedTimeToUtc(date, endTime);
 
+  // C9: Check for active building closure overlapping the window
+  const buildingClosure = await getOverlappingBuildingClosure(buildingId, date, windowStart, windowEnd);
+  if (buildingClosure) {
+    const closedRooms = rooms.map((room) => ({
+      ...room,
+      status: 'closed',
+      closure_reason: buildingClosure.reason || 'College closed today for exams',
+      closure_scope: 'building',
+      closure_badge: `${buildingClosure.reason || 'Exam'} — Building Closed`,
+      closure_note: buildingClosure.note || null,
+      closed_until: buildingClosure.end_time ? zonedTimeToUtc(date, String(buildingClosure.end_time).slice(0, 5)) : null,
+      busy_blocks: [],
+    }));
+
+    return {
+      status: 'closed',
+      reason: buildingClosure.reason || 'College closed today for exams',
+      note: buildingClosure.note || null,
+      building_closure: {
+        id: buildingClosure.id,
+        reason: buildingClosure.reason || 'College closed today for exams',
+        note: buildingClosure.note || null,
+        start_date: buildingClosure.start_date,
+        end_date: buildingClosure.end_date,
+        start_time: buildingClosure.start_time,
+        end_time: buildingClosure.end_time,
+      },
+      rooms: [],
+      closed_rooms: closedRooms,
+      coverage,
+    };
+  }
+
   const results = [];
+  const closedResults = [];
 
   for (const room of rooms) {
     const availability = await computeRoomAvailability(room, date, dayOfWeek, building);
 
-    const isFreeForWindow = availability.free_intervals.some(
-      (interval) => interval.start <= windowStart && interval.end >= windowEnd
+    const overlappingClosure = availability.busy_blocks.find(
+      (b) => b.is_closure && b.start < windowEnd && b.end > windowStart
     );
 
-    if (isFreeForWindow) {
-      results.push({
+    if (overlappingClosure) {
+      const badge = overlappingClosure.scope === 'floor'
+        ? `${overlappingClosure.reason || 'Exam'} — ${room.floor} Floor Closed`
+        : `${overlappingClosure.reason || 'Exam'} — Room Closed`;
+
+      closedResults.push({
         ...room,
-        status: 'free_for_window',
+        status: 'closed',
+        closure_reason: overlappingClosure.reason || 'Exam',
+        closure_scope: overlappingClosure.scope || 'room',
+        closure_badge: badge,
+        closure_note: overlappingClosure.note || null,
+        closed_until: overlappingClosure.end,
         busy_blocks: availability.busy_blocks,
       });
+    } else {
+      const isFreeForWindow = availability.free_intervals.some(
+        (interval) => interval.start <= windowStart && interval.end >= windowEnd
+      );
+
+      if (isFreeForWindow) {
+        results.push({
+          ...room,
+          status: 'free_for_window',
+          busy_blocks: availability.busy_blocks,
+        });
+      }
     }
   }
 
-  return { status: 'ok', rooms: results, coverage };
+  return { status: 'ok', rooms: results, closed_rooms: closedResults, coverage };
 }
 
 /**
@@ -154,13 +263,18 @@ export async function getRoomTimeline(roomId, date) {
   }
 
   const isToday = date === toDateStr();
+  const now = isToday ? new Date() : null;
   const availability = await computeRoomAvailability(
     room,
     date,
     dayOfWeek,
     building,
-    isToday ? new Date() : null
+    now
   );
+
+  const activeClosure = availability.busy_blocks.find(
+    (b) => b.is_closure && (!now || (b.start <= now && b.end > now))
+  ) || availability.busy_blocks.find((b) => b.is_closure);
 
   return {
     ...base,
@@ -173,6 +287,8 @@ export async function getRoomTimeline(roomId, date) {
       : 'scheduled',
     reason: availability.reason || null,
     free_until: availability.free_until,
+    closed_until: availability.status === 'closed' ? (activeClosure?.end || null) : null,
+    closure_note: activeClosure?.note || null,
   };
 }
 
@@ -270,6 +386,8 @@ async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now =
       end: b.end,
       is_closure: !!b.isClosure,
       reason: b.reason || null,
+      scope: b.scope || null,
+      note: b.note || null,
     })),
     free_intervals: freeIntervals,
   };
@@ -694,6 +812,64 @@ export async function hasTimetableForDate(buildingId, dateStr, terms = null) {
     [buildingId, dateStr]
   );
   return legacyRes.rows.length > 0;
+}
+
+/**
+ * Check if an active building-wide closure exists for a building on a date (C9).
+ */
+export async function getActiveBuildingClosure(buildingId, dateStr, now = null) {
+  const res = await query(
+    `SELECT * FROM closures
+     WHERE scope = 'building'
+       AND (building_id IS NULL OR building_id = $1)
+       AND start_date <= $2 AND end_date >= $2
+     ORDER BY id ASC`,
+    [buildingId, dateStr]
+  );
+  if (res.rows.length === 0) return null;
+
+  for (const c of res.rows) {
+    if (!c.start_time || !c.end_time) {
+      return c; // Whole-day closure covers the full day
+    }
+    if (now) {
+      const s = zonedTimeToUtc(dateStr, String(c.start_time).slice(0, 5));
+      const e = zonedTimeToUtc(dateStr, String(c.end_time).slice(0, 5));
+      if (now >= s && now < e) {
+        return c;
+      }
+    } else {
+      return c;
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if a building closure overlaps a given time window (C9).
+ */
+export async function getOverlappingBuildingClosure(buildingId, dateStr, windowStart, windowEnd) {
+  const res = await query(
+    `SELECT * FROM closures
+     WHERE scope = 'building'
+       AND (building_id IS NULL OR building_id = $1)
+       AND start_date <= $2 AND end_date >= $2
+     ORDER BY id ASC`,
+    [buildingId, dateStr]
+  );
+  if (res.rows.length === 0) return null;
+
+  for (const c of res.rows) {
+    if (!c.start_time || !c.end_time) {
+      return c; // Whole-day closure overlaps any window
+    }
+    const s = zonedTimeToUtc(dateStr, String(c.start_time).slice(0, 5));
+    const e = zonedTimeToUtc(dateStr, String(c.end_time).slice(0, 5));
+    if (s < windowEnd && e > windowStart) {
+      return c;
+    }
+  }
+  return null;
 }
 
 // ── Helper queries ─────────────────────────────────────────

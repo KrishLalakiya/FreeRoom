@@ -525,5 +525,82 @@ describe('no-class days for holidays and breaks (C12)', () => {
   });
 });
 
+// ── Student UI: Building and Room Closures (C9) ─────────────
+
+describe('student UI closure behavior (C9)', () => {
+  const terms = [
+    { id: 1, name: 'Term 5', start_date: '2026-08-01', end_date: '2026-10-28' },
+  ];
+  const room1A = { id: 101, building_id: 1, name: '1A', floor: '1st', parent_room_id: null };
+  const room2A = { id: 102, building_id: 1, name: '2A', floor: '2nd', parent_room_id: null };
+
+  it('building closure marks all rooms closed with closure reason (C9)', () => {
+    const buildingClosure = {
+      id: 10,
+      scope: 'building',
+      building_id: 1,
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      reason: 'College Closed for State Exams',
+      note: 'All campus activities suspended',
+    };
+
+    const res1 = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      closures: [buildingClosure],
+    });
+    const res2 = applyClosuresToAvailability({
+      room: room2A,
+      date: '2026-09-15',
+      terms,
+      closures: [buildingClosure],
+    });
+
+    expect(res1.status).toBe('closed');
+    expect(res1.reason).toBe('College Closed for State Exams');
+    expect(res1.free_intervals).toHaveLength(0);
+    expect(res1.closures[0].isClosure).toBe(true);
+
+    expect(res2.status).toBe('closed');
+    expect(res2.reason).toBe('College Closed for State Exams');
+    expect(res2.free_intervals).toHaveLength(0);
+  });
+
+  it('floor closure marks rooms on that floor closed but leaves other floors unaffected (C9)', () => {
+    const floor2Closure = {
+      id: 11,
+      scope: 'floor',
+      building_id: 1,
+      floor: '2nd',
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      reason: '2nd Floor Renovation & Exam',
+    };
+
+    // Room 2A on 2nd floor is closed
+    const res2A = applyClosuresToAvailability({
+      room: room2A,
+      date: '2026-09-15',
+      terms,
+      closures: [floor2Closure],
+    });
+    expect(res2A.status).toBe('closed');
+    expect(res2A.reason).toBe('2nd Floor Renovation & Exam');
+    expect(res2A.free_intervals).toHaveLength(0);
+
+    // Room 1A on 1st floor is unaffected and free
+    const res1A = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      closures: [floor2Closure],
+    });
+    expect(res1A.status).toBe('free');
+    expect(res1A.free_intervals.length).toBeGreaterThan(0);
+  });
+});
+
 
 
