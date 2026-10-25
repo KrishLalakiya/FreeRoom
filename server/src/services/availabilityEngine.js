@@ -166,7 +166,12 @@ export async function getRoomTimeline(roomId, date) {
     ...base,
     busy_blocks: availability.busy_blocks,
     free_intervals: availability.free_intervals,
-    status: isToday ? availability.status : 'scheduled',
+    status: availability.status === 'closed'
+      ? 'closed'
+      : isToday
+      ? availability.status
+      : 'scheduled',
+    reason: availability.reason || null,
     free_until: availability.free_until,
   };
 }
@@ -209,30 +214,48 @@ async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now =
     end: new Date(block.end.getTime() + BUFFER_MINUTES * 60000),
   }));
 
-  busyBlocks = mergeOverlapping(busyBlocks);
+  // C7: closures rank above timetable
+  const closureBlocks = await getClosureOccurrences(room, childRooms, dateStr, building);
+  busyBlocks = mergeOverlapping([...busyBlocks, ...closureBlocks]);
 
   const dayStart = zonedTimeToUtc(dateStr, building.opening_time);
   const dayEnd = zonedTimeToUtc(dateStr, building.closing_time);
   const freeIntervals = computeFreeIntervals(busyBlocks, dayStart, dayEnd);
 
-  let status = 'unknown';
+  let status = 'free';
   let freeUntil = null;
+  let reason = null;
+
+  const wholeDayClosure = closureBlocks.find((c) => c.start <= dayStart && c.end >= dayEnd);
+  if (wholeDayClosure) {
+    status = 'closed';
+    reason = wholeDayClosure.reason || 'Exam';
+  }
 
   if (now) {
-    const currentFree = freeIntervals.find(
-      (interval) => interval.start <= now && interval.end > now
-    );
-
-    if (currentFree) {
-      status = 'free';
-      freeUntil = currentFree.end;
+    const activeClosure = closureBlocks.find((c) => c.start <= now && c.end > now);
+    if (activeClosure) {
+      status = 'closed';
+      reason = activeClosure.reason || 'Exam';
     } else {
-      status = 'busy';
+      const currentFree = freeIntervals.find(
+        (interval) => interval.start <= now && interval.end > now
+      );
+
+      if (currentFree) {
+        status = 'free';
+        freeUntil = currentFree.end;
+      } else {
+        status = 'busy';
+      }
     }
+  } else if (!wholeDayClosure) {
+    status = freeIntervals.length > 0 ? 'free' : 'busy';
   }
 
   return {
     status,
+    reason,
     free_until: freeUntil,
     busy_blocks: busyBlocks.map((b) => ({
       title: b.title,
@@ -240,6 +263,8 @@ async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now =
       group: b.group,
       start: b.start,
       end: b.end,
+      is_closure: !!b.isClosure,
+      reason: b.reason || null,
     })),
     free_intervals: freeIntervals,
   };
@@ -456,6 +481,163 @@ export function evaluateDateAvailability({
     free_intervals: freeIntervals,
     busy_blocks: busyBlocks,
   };
+}
+
+/**
+ * Test whether a closure applies to a specific room, taking into account
+ * building, floor, room, and 2B parent/child relationships (C7).
+ */
+export function doesClosureApplyToRoom(closure, room, childRoomIds = [], parentRoomId = null) {
+  if (closure.scope === 'building') {
+    if (closure.building_id && room.building_id && closure.building_id !== room.building_id) {
+      return false;
+    }
+    return true;
+  }
+  if (closure.scope === 'floor') {
+    return String(closure.floor || '').toLowerCase().trim() === String(room.floor || '').toLowerCase().trim();
+  }
+  if (closure.scope === 'room') {
+    if (closure.room_id === room.id) return true;
+    const parent = parentRoomId !== null ? parentRoomId : room.parent_room_id;
+    if (parent && closure.room_id === parent) return true;
+    const children = childRoomIds.length > 0 ? childRoomIds : (room.childRoomIds || []);
+    if (Array.isArray(children) && children.includes(closure.room_id)) return true;
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Convert a closure into a busy block on a date (C7).
+ */
+export function closureToBusyBlock(closure, dateStr, openingTime = '06:00', closingTime = '22:00') {
+  const isWholeDay = !closure.start_time || !closure.end_time;
+  const startStr = isWholeDay ? openingTime : String(closure.start_time).slice(0, 5);
+  const endStr = isWholeDay ? closingTime : String(closure.end_time).slice(0, 5);
+  return {
+    title: closure.reason || 'Exam',
+    reason: closure.reason || 'Exam',
+    note: closure.note || null,
+    isClosure: true,
+    isWholeDay,
+    scope: closure.scope,
+    start: zonedTimeToUtc(dateStr, startStr),
+    end: zonedTimeToUtc(dateStr, endStr),
+  };
+}
+
+/**
+ * Pure evaluation function for room availability applying terms, timetable, and closures (C7).
+ */
+export function applyClosuresToAvailability({
+  room,
+  date,
+  terms = [],
+  timetableBlocks = [],
+  closures = [],
+  childRoomIds = [],
+  parentRoomId = null,
+  openingTime = '06:00',
+  closingTime = '22:00',
+  now = null,
+}) {
+  if (!isDateInsideAnyTerm(date, terms)) {
+    return {
+      status: 'unknown',
+      reason: 'Outside academic term: no timetable data',
+      free_until: null,
+      free_intervals: [],
+      busy_blocks: [],
+      closures: [],
+    };
+  }
+
+  const pRoomId = parentRoomId !== null ? parentRoomId : room.parent_room_id;
+  const cRoomIds = childRoomIds.length > 0 ? childRoomIds : (room.childRoomIds || []);
+
+  const relevantClosures = closures.filter((c) =>
+    doesClosureApplyToRoom(c, room, cRoomIds, pRoomId)
+  );
+
+  const closureBlocks = relevantClosures.map((c) =>
+    closureToBusyBlock(c, date, openingTime, closingTime)
+  );
+
+  const dayStart = zonedTimeToUtc(date, openingTime);
+  const dayEnd = zonedTimeToUtc(date, closingTime);
+
+  const allBlocks = mergeOverlapping([...timetableBlocks, ...closureBlocks]);
+  const freeIntervals = computeFreeIntervals(allBlocks, dayStart, dayEnd);
+
+  let status = 'free';
+  let freeUntil = null;
+  let reason = null;
+
+  const wholeDayClosure = closureBlocks.find((c) => c.start <= dayStart && c.end >= dayEnd);
+  if (wholeDayClosure) {
+    status = 'closed';
+    reason = wholeDayClosure.reason || 'Exam';
+  }
+
+  if (now) {
+    const activeClosure = closureBlocks.find((c) => c.start <= now && c.end > now);
+    if (activeClosure) {
+      status = 'closed';
+      reason = activeClosure.reason || 'Exam';
+    } else {
+      const currentFree = freeIntervals.find((interval) => interval.start <= now && interval.end > now);
+      if (currentFree) {
+        status = 'free';
+        freeUntil = currentFree.end;
+      } else {
+        status = 'busy';
+      }
+    }
+  } else if (!wholeDayClosure) {
+    status = freeIntervals.length > 0 ? 'free' : 'busy';
+  }
+
+  return {
+    status,
+    reason,
+    free_until: freeUntil,
+    free_intervals: freeIntervals,
+    busy_blocks: allBlocks,
+    closures: closureBlocks,
+  };
+}
+
+/**
+ * Fetch closures applying to a room from the database (C7).
+ */
+async function getClosureOccurrences(room, childRooms, dateStr, building) {
+  const roomIds = [room.id];
+  if (room.parent_room_id) roomIds.push(room.parent_room_id);
+  if (Array.isArray(childRooms)) {
+    for (const child of childRooms) {
+      roomIds.push(child.id);
+    }
+  }
+
+  const res = await query(
+    `SELECT *
+     FROM closures
+     WHERE start_date <= $1 AND end_date >= $1
+       AND (
+         (scope = 'building' AND (building_id IS NULL OR building_id = $2))
+         OR
+         (scope = 'floor' AND LOWER(TRIM(floor)) = LOWER(TRIM($3)))
+         OR
+         (scope = 'room' AND room_id = ANY($4::int[]))
+       )
+     ORDER BY id ASC`,
+    [dateStr, room.building_id, room.floor, roomIds]
+  );
+
+  return res.rows.map((c) =>
+    closureToBusyBlock(c, dateStr, building.opening_time, building.closing_time)
+  );
 }
 
 /**

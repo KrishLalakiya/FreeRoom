@@ -4,6 +4,9 @@ import {
   computeFreeIntervals,
   isDateInsideAnyTerm,
   evaluateDateAvailability,
+  doesClosureApplyToRoom,
+  closureToBusyBlock,
+  applyClosuresToAvailability,
 } from './availabilityEngine.js';
 
 /**
@@ -226,4 +229,234 @@ describe('dates outside any term show as unknown (C5)', () => {
     expect(isDateInsideAnyTerm('2026-12-20', terms)).toBe(true); // Term 6 end
   });
 });
+
+// ── Closures application and ranking in engine (C7) ─────────
+
+describe('closures application and ranking in engine (C7)', () => {
+  const terms = [
+    { id: 1, name: 'Term 5', start_date: '2026-08-01', end_date: '2026-10-28' },
+  ];
+  const room1A = { id: 101, building_id: 1, name: '1A', floor: '1st', parent_room_id: null };
+  const room1B = { id: 102, building_id: 1, name: '1B', floor: '1st', parent_room_id: null };
+  const room2A = { id: 201, building_id: 1, name: '2A', floor: '2nd', parent_room_id: null };
+  const room2B = { id: 202, building_id: 1, name: '2B', floor: '2nd', parent_room_id: null, childRoomIds: [203, 204] };
+  const room2B1 = { id: 203, building_id: 1, name: '2B1', floor: '2nd', parent_room_id: 202 };
+  const room2B2 = { id: 204, building_id: 1, name: '2B2', floor: '2nd', parent_room_id: 202 };
+  const roomC = { id: 301, building_id: 1, name: 'C', floor: 'Ground', parent_room_id: null };
+
+  it('Building closure blocks all rooms', () => {
+    const buildingClosure = {
+      id: 1,
+      scope: 'building',
+      building_id: 1,
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      reason: 'College-wide Exam',
+    };
+
+    const res1A = applyClosuresToAvailability({ room: room1A, date: '2026-09-15', terms, closures: [buildingClosure] });
+    const res2A = applyClosuresToAvailability({ room: room2A, date: '2026-09-15', terms, closures: [buildingClosure] });
+    const resC = applyClosuresToAvailability({ room: roomC, date: '2026-09-15', terms, closures: [buildingClosure] });
+
+    expect(res1A.status).toBe('closed');
+    expect(res1A.reason).toBe('College-wide Exam');
+    expect(res2A.status).toBe('closed');
+    expect(resC.status).toBe('closed');
+  });
+
+  it('Floor closure blocks all rooms on that floor', () => {
+    const floorClosure = {
+      id: 2,
+      scope: 'floor',
+      floor: '2nd',
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      reason: '2nd Floor Midterm Exam',
+    };
+
+    // 2nd floor rooms are closed
+    const res2A = applyClosuresToAvailability({ room: room2A, date: '2026-09-15', terms, closures: [floorClosure] });
+    const res2B = applyClosuresToAvailability({ room: room2B, date: '2026-09-15', terms, closures: [floorClosure] });
+    expect(res2A.status).toBe('closed');
+    expect(res2B.status).toBe('closed');
+
+    // 1st floor room is free
+    const res1A = applyClosuresToAvailability({ room: room1A, date: '2026-09-15', terms, closures: [floorClosure] });
+    expect(res1A.status).toBe('free');
+  });
+
+  it('Room closure blocks that specific room', () => {
+    const roomClosure = {
+      id: 3,
+      scope: 'room',
+      room_id: 101, // 1A
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      reason: 'Lab Exam in 1A',
+    };
+
+    const res1A = applyClosuresToAvailability({ room: room1A, date: '2026-09-15', terms, closures: [roomClosure] });
+    const res1B = applyClosuresToAvailability({ room: room1B, date: '2026-09-15', terms, closures: [roomClosure] });
+
+    expect(res1A.status).toBe('closed');
+    expect(res1B.status).toBe('free');
+  });
+
+  it('2B closure blocks 2B1 and 2B2; 2B1 closure blocks 2B', () => {
+    const closureOn2B = {
+      id: 4,
+      scope: 'room',
+      room_id: 202, // parent 2B
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      reason: 'Grand Hall Exam',
+    };
+
+    // Parent closure covers both children
+    const res2B1 = applyClosuresToAvailability({ room: room2B1, parentRoomId: 202, date: '2026-09-15', terms, closures: [closureOn2B] });
+    const res2B2 = applyClosuresToAvailability({ room: room2B2, parentRoomId: 202, date: '2026-09-15', terms, closures: [closureOn2B] });
+    expect(res2B1.status).toBe('closed');
+    expect(res2B2.status).toBe('closed');
+
+    // Child closure on 2B1 covers parent 2B, but leaves sibling 2B2 free
+    const closureOn2B1 = {
+      id: 5,
+      scope: 'room',
+      room_id: 203, // child 2B1
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      reason: 'Sub-room 2B1 Viva',
+    };
+
+    const resParentFromChild = applyClosuresToAvailability({
+      room: room2B,
+      childRoomIds: [203, 204],
+      date: '2026-09-15',
+      terms,
+      closures: [closureOn2B1],
+    });
+    const resSibling2B2 = applyClosuresToAvailability({
+      room: room2B2,
+      parentRoomId: 202,
+      childRoomIds: [],
+      date: '2026-09-15',
+      terms,
+      closures: [closureOn2B1],
+    });
+
+    expect(resParentFromChild.status).toBe('closed');
+    expect(resSibling2B2.status).toBe('free');
+  });
+
+  it('Timetable class during closure is superseded by the closure block', () => {
+    const wholeDayClosure = {
+      id: 6,
+      scope: 'room',
+      room_id: 101,
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      reason: 'Exam Day',
+    };
+
+    // Normal class scheduled from 10:00 to 12:00
+    const timetableClass = {
+      start: new Date('2026-09-15T04:30:00.000Z'), // 10:00 IST
+      end: new Date('2026-09-15T06:30:00.000Z'),   // 12:00 IST
+      title: 'MERN Stack',
+    };
+
+    const res = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      timetableBlocks: [timetableClass],
+      closures: [wholeDayClosure],
+    });
+
+    // Entire day is closed, not free or regular busy
+    expect(res.status).toBe('closed');
+    expect(res.reason).toBe('Exam Day');
+    expect(res.free_intervals).toHaveLength(0);
+  });
+
+  it('Room free after partial-day closure (e.g., exam 09:00-12:00 -> free from 12:00 to 22:00)', () => {
+    const partialClosure = {
+      id: 7,
+      scope: 'room',
+      room_id: 101,
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      start_time: '09:00',
+      end_time: '12:00',
+      reason: 'Morning Exam',
+    };
+
+    const res = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      timetableBlocks: [],
+      closures: [partialClosure],
+    });
+
+    expect(res.free_intervals).toHaveLength(2);
+    // 06:00 to 09:00 free interval (in UTC: 00:30 to 03:30)
+    expect(res.free_intervals[0].start).toEqual(new Date('2026-09-15T00:30:00.000Z'));
+    expect(res.free_intervals[0].end).toEqual(new Date('2026-09-15T03:30:00.000Z'));
+    // 12:00 to 22:00 free interval (in UTC: 06:30 to 16:30)
+    expect(res.free_intervals[1].start).toEqual(new Date('2026-09-15T06:30:00.000Z'));
+    expect(res.free_intervals[1].end).toEqual(new Date('2026-09-15T16:30:00.000Z'));
+
+    // Check with `now` at 14:00 (08:30 UTC): room should be free until 22:00 (16:30 UTC)
+    const afternoonNow = new Date('2026-09-15T08:30:00.000Z');
+    const nowRes = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      timetableBlocks: [],
+      closures: [partialClosure],
+      now: afternoonNow,
+    });
+    expect(nowRes.status).toBe('free');
+    expect(nowRes.free_until).toEqual(new Date('2026-09-15T16:30:00.000Z'));
+
+    // Check with `now` at 10:00 (04:30 UTC) during the exam: room status is 'closed'
+    const examNow = new Date('2026-09-15T04:30:00.000Z');
+    const duringExamRes = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      timetableBlocks: [],
+      closures: [partialClosure],
+      now: examNow,
+    });
+    expect(duringExamRes.status).toBe('closed');
+    expect(duringExamRes.reason).toBe('Morning Exam');
+  });
+
+  it('Whole day closure -> status = "closed"', () => {
+    const wholeDayClosure = {
+      id: 8,
+      scope: 'room',
+      room_id: 101,
+      start_date: '2026-09-15',
+      end_date: '2026-09-15',
+      start_time: null,
+      end_time: null,
+      reason: 'Final Exams',
+    };
+
+    const res = applyClosuresToAvailability({
+      room: room1A,
+      date: '2026-09-15',
+      terms,
+      closures: [wholeDayClosure],
+    });
+
+    expect(res.status).toBe('closed');
+    expect(res.reason).toBe('Final Exams');
+    expect(res.free_intervals).toHaveLength(0);
+  });
+});
+
 
