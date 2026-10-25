@@ -30,20 +30,20 @@ async function seed() {
 
     // ── Rooms ──────────────────────────────────────────────
     // Ground floor
-    const roomC = await upsertRoom(client, buildingId, 'C', 'Ground', 60);
+    const roomC = await upsertRoom(client, buildingId, 'C', 'Ground', 200);
 
     // 1st floor
-    const room1A = await upsertRoom(client, buildingId, '1A', '1st', 60);
-    const room1B = await upsertRoom(client, buildingId, '1B', '1st', 60);
+    const room1A = await upsertRoom(client, buildingId, '1A', '1st', 200);
+    const room1B = await upsertRoom(client, buildingId, '1B', '1st', 200);
 
     // 2nd floor
-    const room2A = await upsertRoom(client, buildingId, '2A', '2nd', 60);
-    const room2C = await upsertRoom(client, buildingId, '2C', '2nd', 60);
+    const room2A = await upsertRoom(client, buildingId, '2A', '2nd', 200);
+    const room2C = await upsertRoom(client, buildingId, '2C', '2nd', 200);
 
     // 2B is dividable — create parent first, then children
-    const room2B = await upsertRoom(client, buildingId, '2B', '2nd', 120);
-    const room2B1 = await upsertRoom(client, buildingId, '2B1', '2nd', 60, room2B);
-    const room2B2 = await upsertRoom(client, buildingId, '2B2', '2nd', 60, room2B);
+    const room2B = await upsertRoom(client, buildingId, '2B', '2nd', 200);
+    const room2B1 = await upsertRoom(client, buildingId, '2B1', '2nd', 100, room2B);
+    const room2B2 = await upsertRoom(client, buildingId, '2B2', '2nd', 100, room2B);
 
     // ── Room aliases ───────────────────────────────────────
     const aliases = [
