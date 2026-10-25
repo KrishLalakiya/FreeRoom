@@ -6,6 +6,7 @@ import {
   addDaysToDateStr,
   zonedTimeToUtc,
 } from '../utils/timezone.js';
+import { availabilityCache, clearAvailabilityCache } from './cache.js';
 
 const BUFFER_MINUTES = parseInt(process.env.BUFFER_MINUTES || '5', 10);
 
@@ -31,7 +32,13 @@ const BUFFER_MINUTES = parseInt(process.env.BUFFER_MINUTES || '5', 10);
  * Returns an envelope so callers can distinguish "no free rooms" from
  * "the schedule is unknown for this date" (PRD section 5/8).
  */
-export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuration = 60, floor }) {
+export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuration = 60, floor, bypassCache = false }) {
+  const cacheKey = `free_now:${buildingId}:${floor || 'all'}:${minDuration}:${toDateStr(now)}:${Math.floor(now.getTime() / 30000)}`;
+  if (!bypassCache) {
+    const cached = availabilityCache.get(cacheKey);
+    if (cached) return structuredClone(cached);
+  }
+
   const rooms = await getRooms(buildingId, floor);
   const building = await getBuilding(buildingId);
 
@@ -63,7 +70,7 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
       busy_blocks: [],
     }));
 
-    return {
+    const buildingClosureResult = {
       status: 'closed',
       reason: buildingClosure.reason || 'College closed today for exams',
       note: buildingClosure.note || null,
@@ -80,6 +87,10 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
       closed_rooms: closedRooms,
       coverage,
     };
+    if (!bypassCache) {
+      availabilityCache.set(cacheKey, buildingClosureResult);
+    }
+    return buildingClosureResult;
   }
 
   const results = [];
@@ -130,13 +141,23 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
       String(a.name).localeCompare(String(b.name))
   );
 
-  return { status: 'ok', rooms: results, closed_rooms: closedResults, coverage };
+  const finalResult = { status: 'ok', rooms: results, closed_rooms: closedResults, coverage };
+  if (!bypassCache) {
+    availabilityCache.set(cacheKey, finalResult);
+  }
+  return finalResult;
 }
 
 /**
  * Find rooms free for an entire future window.
  */
-export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTime, floor, capacity }) {
+export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTime, floor, capacity, bypassCache = false }) {
+  const cacheKey = `free_window:${buildingId}:${date}:${startTime}:${endTime}:${floor || 'all'}:${capacity || 'any'}`;
+  if (!bypassCache) {
+    const cached = availabilityCache.get(cacheKey);
+    if (cached) return structuredClone(cached);
+  }
+
   const rooms = await getRooms(buildingId, floor, capacity);
   const building = await getBuilding(buildingId);
 
@@ -170,7 +191,7 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
       busy_blocks: [],
     }));
 
-    return {
+    const buildingClosureResult = {
       status: 'closed',
       reason: buildingClosure.reason || 'College closed today for exams',
       note: buildingClosure.note || null,
@@ -187,6 +208,10 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
       closed_rooms: closedRooms,
       coverage,
     };
+    if (!bypassCache) {
+      availabilityCache.set(cacheKey, buildingClosureResult);
+    }
+    return buildingClosureResult;
   }
 
   const results = [];
@@ -229,13 +254,22 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
     }
   }
 
-  return { status: 'ok', rooms: results, closed_rooms: closedResults, coverage };
+  const finalResult = { status: 'ok', rooms: results, closed_rooms: closedResults, coverage };
+  if (!bypassCache) {
+    availabilityCache.set(cacheKey, finalResult);
+  }
+  return finalResult;
 }
 
 /**
  * Get a single room's full-day availability with timeline.
  */
-export async function getRoomTimeline(roomId, date) {
+export async function getRoomTimeline(roomId, date, { bypassCache = false } = {}) {
+  const cacheKey = `timeline:${roomId}:${date}`;
+  if (!bypassCache) {
+    const cached = availabilityCache.get(cacheKey);
+    if (cached) return structuredClone(cached);
+  }
   const roomRes = await query(
     'SELECT r.*, b.opening_time, b.closing_time, b.name as building_name FROM rooms r JOIN buildings b ON r.building_id = b.id WHERE r.id = $1',
     [roomId]
@@ -276,7 +310,7 @@ export async function getRoomTimeline(roomId, date) {
     (b) => b.is_closure && (!now || (b.start <= now && b.end > now))
   ) || availability.busy_blocks.find((b) => b.is_closure);
 
-  return {
+  const timelineResult = {
     ...base,
     busy_blocks: availability.busy_blocks,
     free_intervals: availability.free_intervals,
@@ -290,6 +324,10 @@ export async function getRoomTimeline(roomId, date) {
     closed_until: availability.status === 'closed' ? (activeClosure?.end || null) : null,
     closure_note: activeClosure?.note || null,
   };
+  if (!bypassCache) {
+    availabilityCache.set(cacheKey, timelineResult);
+  }
+  return timelineResult;
 }
 
 async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now = null) {
@@ -1001,5 +1039,5 @@ async function getTimetableCoverage(buildingId) {
   return { valid_from: legacyRow.valid_from, valid_to: legacyRow.valid_to };
 }
 
-// C2: isClosedDay removed — holidays and breaks no longer close rooms.
-// The closed_days table remains in the schema; C6 will replace it with closures.
+export { availabilityCache, clearAvailabilityCache };
+

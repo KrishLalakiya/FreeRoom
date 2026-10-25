@@ -4,6 +4,7 @@ import { query } from '../config/db.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { importTimetable } from '../services/timetableImport.js';
 import { isValidDateStr } from '../utils/timezone.js';
+import { clearAvailabilityCache } from '../services/cache.js';
 
 const router = Router();
 
@@ -59,6 +60,8 @@ router.post('/events', authenticate, requireAdmin, async (req, res) => {
       RETURNING *;
     `, [roomId, title, start, end, req.user.id]);
 
+    clearAvailabilityCache({ roomId });
+
     res.status(201).json({ event: result.rows[0] });
   } catch (err) {
     console.error('Create event error:', err);
@@ -79,6 +82,8 @@ router.delete('/events/:id', authenticate, requireAdmin, async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Event not found' });
     }
+
+    clearAvailabilityCache({ roomId: result.rows[0].room_id });
 
     res.json({ message: 'Event deleted', event: result.rows[0] });
   } catch (err) {
@@ -125,6 +130,8 @@ router.post('/cancel-class', authenticate, requireAdmin, async (req, res) => {
         message: 'This class was already cancelled for this date.',
       });
     }
+
+    clearAvailabilityCache();
 
     res.status(201).json({
       message: 'Class cancelled for this date',
@@ -233,6 +240,8 @@ router.post('/terms', authenticate, requireAdmin, async (req, res) => {
       RETURNING *
     `, [batchId, semNum, tNum, startDate, endDate]);
 
+    clearAvailabilityCache();
+
     res.status(201).json({
       term: {
         ...result.rows[0],
@@ -242,6 +251,110 @@ router.post('/terms', authenticate, requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Create term error:', err);
     res.status(500).json({ error: 'Failed to create term' });
+  }
+});
+
+/**
+ * PUT /api/admin/terms/:id
+ * Update an existing term.
+ */
+router.put('/terms/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const termId = parseInt(req.params.id, 10);
+    const { semesterNumber, termNumber, startDate, endDate } = req.body;
+
+    const existingRes = await query('SELECT * FROM terms WHERE id = $1', [termId]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Term not found' });
+    }
+    const current = existingRes.rows[0];
+
+    const sDate = startDate || current.start_date;
+    const eDate = endDate || current.end_date;
+    const semNum = semesterNumber !== undefined ? parseInt(semesterNumber, 10) : current.semester_number;
+    const tNum = termNumber !== undefined ? parseInt(termNumber, 10) : current.term_number;
+
+    if (!isValidDateStr(sDate) || !isValidDateStr(eDate)) {
+      return res.status(400).json({
+        error: 'Invalid dates',
+        message: 'startDate and endDate must be real dates in YYYY-MM-DD format.',
+      });
+    }
+
+    if (sDate > eDate) {
+      return res.status(400).json({
+        error: 'Invalid date range',
+        message: 'startDate must be on or before endDate.',
+      });
+    }
+
+    // Check duplicate term number for this batch (excluding this term)
+    const dupRes = await query(
+      'SELECT id FROM terms WHERE batch_id = $1 AND term_number = $2 AND id != $3',
+      [current.batch_id, tNum, termId]
+    );
+    if (dupRes.rows.length > 0) {
+      return res.status(409).json({
+        error: 'Duplicate term',
+        message: `Term ${tNum} already exists for this batch.`,
+      });
+    }
+
+    // Check same-batch date overlap (C11 rule: terms of same batch cannot overlap)
+    const overlapRes = await query(`
+      SELECT id, term_number, start_date, end_date
+      FROM terms
+      WHERE batch_id = $1
+        AND id != $4
+        AND start_date <= $3
+        AND end_date >= $2
+    `, [current.batch_id, sDate, eDate, termId]);
+
+    if (overlapRes.rows.length > 0) {
+      const clash = overlapRes.rows[0];
+      const startStr = clash.start_date instanceof Date ? clash.start_date.toISOString().slice(0, 10) : String(clash.start_date).slice(0, 10);
+      const endStr = clash.end_date instanceof Date ? clash.end_date.toISOString().slice(0, 10) : String(clash.end_date).slice(0, 10);
+      return res.status(409).json({
+        error: 'Overlapping term',
+        message: `Term dates overlap with Term ${clash.term_number} (${startStr} to ${endStr}).`,
+      });
+    }
+
+    const result = await query(`
+      UPDATE terms
+      SET semester_number = $1, term_number = $2, start_date = $3, end_date = $4
+      WHERE id = $5
+      RETURNING *
+    `, [semNum, tNum, sDate, eDate, termId]);
+
+    clearAvailabilityCache();
+
+    res.json({ term: result.rows[0] });
+  } catch (err) {
+    console.error('Update term error:', err);
+    res.status(500).json({ error: 'Failed to update term' });
+  }
+});
+
+/**
+ * DELETE /api/admin/terms/:id
+ * Delete a term and its associated timetable entries (via cascade).
+ */
+router.delete('/terms/:id', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const termId = parseInt(req.params.id, 10);
+    const result = await query('DELETE FROM terms WHERE id = $1 RETURNING *', [termId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Term not found' });
+    }
+
+    clearAvailabilityCache();
+
+    res.json({ message: 'Term deleted', term: result.rows[0] });
+  } catch (err) {
+    console.error('Delete term error:', err);
+    res.status(500).json({ error: 'Failed to delete term' });
   }
 });
 
@@ -416,6 +529,10 @@ router.post('/timetable/import', authenticate, requireAdmin, upload.single('file
       validTo,
       saveValidRowsOnly,
     });
+
+    if (report.committed) {
+      clearAvailabilityCache();
+    }
 
     return res.status(report.committed ? 200 : 400).json(report);
   } catch (err) {
@@ -704,6 +821,8 @@ router.post('/closures', authenticate, requireAdmin, async (req, res) => {
         [mergedStart, mergedEnd, mergedStartTime, mergedEndTime, reason.trim() || target.reason, mergedNote || null, target.id]
       );
 
+      clearAvailabilityCache({ roomId: parsedRoomId, buildingId: resolvedBuildingId });
+
       return res.status(200).json({
         closure: updateRes.rows[0],
         merged: true,
@@ -733,6 +852,8 @@ router.post('/closures', authenticate, requireAdmin, async (req, res) => {
       ]
     );
 
+    clearAvailabilityCache({ roomId: parsedRoomId, buildingId: resolvedBuildingId });
+
     res.status(201).json({
       closure: insertRes.rows[0],
       merged: false,
@@ -755,6 +876,8 @@ router.delete('/closures/:id', authenticate, requireAdmin, async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Closure not found' });
     }
+
+    clearAvailabilityCache();
 
     res.json({ message: 'Closure deleted', closure: result.rows[0] });
   } catch (err) {
@@ -798,6 +921,7 @@ router.post('/no-class-days', authenticate, requireAdmin, async (req, res) => {
       ON CONFLICT (building_id, date) DO UPDATE SET reason = EXCLUDED.reason
       RETURNING *
     `, [buildingId, date, reason.trim() || 'Holiday', req.user.id]);
+    clearAvailabilityCache({ buildingId });
     res.status(201).json({ noClassDay: result.rows[0] });
   } catch (err) {
     console.error('Create no-class-day error:', err);
@@ -815,6 +939,7 @@ router.delete('/no-class-days/:id', authenticate, requireAdmin, async (req, res)
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'No-class day not found' });
     }
+    clearAvailabilityCache();
     res.json({ message: 'No-class day deleted', noClassDay: result.rows[0] });
   } catch (err) {
     console.error('Delete no-class-day error:', err);
