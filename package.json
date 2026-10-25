@@ -1,0 +1,13 @@
+{
+  "name": "freeroom",
+  "version": "1.0.0",
+  "description": "FreeRoom - Empty Classroom Finder for Campus Students",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "project": "node start.js",
+    "dev": "node start.js",
+    "start": "node start.js",
+    "rum": "node start.js"
+  }
+}
