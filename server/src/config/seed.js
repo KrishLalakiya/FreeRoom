@@ -20,7 +20,7 @@ async function seed() {
     // ── Building ───────────────────────────────────────────
     const buildingRes = await client.query(`
       INSERT INTO buildings (name, opening_time, closing_time)
-      VALUES ('Pilot Building', '09:00', '20:00')
+      VALUES ('Pilot Building', '06:00', '22:00')
       ON CONFLICT (name) DO UPDATE SET
         opening_time = EXCLUDED.opening_time,
         closing_time = EXCLUDED.closing_time
