@@ -439,8 +439,9 @@ export default function AdminPage() {
   };
 
   return (
-    <div className="app-container">
+    <div className="v3-shell">
       <Navbar />
+      <div className="v3-main">
 
       <button className="back-btn" onClick={() => navigate('/')}>
         <HiOutlineArrowLeft size={16} />
@@ -763,7 +764,7 @@ export default function AdminPage() {
                     </td>
                     <td>
                       {te.batch_year ? (
-                        <span className="room-card-floor" style={{ background: 'rgba(56, 189, 248, 0.12)', color: 'var(--accent-primary-light)' }}>
+                        <span className="room-card-floor">
                           {te.batch_year} (T{te.term_number})
                         </span>
                       ) : (
@@ -841,8 +842,8 @@ export default function AdminPage() {
                 {terms.find((t) => t.id.toString() === selectedTermId.toString()) && (
                   <div style={{
                     padding: '10px 14px',
-                    background: 'rgba(56, 189, 248, 0.08)',
-                    border: '1px solid rgba(56, 189, 248, 0.25)',
+                    background: 'var(--bg-subtle)',
+                    border: '1px solid var(--border-control)',
                     borderRadius: 'var(--radius-md)',
                     marginBottom: 16,
                     fontSize: '0.85rem',
@@ -851,7 +852,7 @@ export default function AdminPage() {
                       const t = terms.find((term) => term.id.toString() === selectedTermId.toString());
                       return (
                         <>
-                          <div style={{ fontWeight: 600, color: 'var(--accent-primary-light)' }}>
+                          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
                             Batch {t.batch_year} • Semester {t.semester_number} • Term {t.term_number}
                           </div>
                           <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
@@ -866,8 +867,8 @@ export default function AdminPage() {
                 {showCreateTerm && (
                   <div style={{
                     padding: '14px',
-                    background: 'rgba(255, 255, 255, 0.03)',
-                    border: '1px solid var(--border-color)',
+                    background: 'var(--bg-subtle)',
+                    border: '1px solid var(--border-control)',
                     borderRadius: 'var(--radius-md)',
                     marginBottom: 16,
                   }}>
@@ -1208,7 +1209,7 @@ export default function AdminPage() {
               )}
 
               {closureScope === 'building' && (
-                <div className="card" style={{ padding: 12, marginBottom: 16, borderColor: 'var(--accent-warning)', background: 'var(--accent-warning-bg, rgba(245, 158, 11, 0.1))' }}>
+                <div className="card" style={{ padding: 12, marginBottom: 16, borderColor: 'var(--accent-warning)', background: 'var(--accent-warning-bg)' }}>
                   <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)' }}>
                     ⚠️ Whole Building Closure
                   </div>
@@ -1410,7 +1411,7 @@ export default function AdminPage() {
           {/* No-Class Days (Holidays & Breaks — C12) Card */}
           <div className="admin-card" style={{ gridColumn: '1 / -1', marginTop: 12 }}>
             <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <HiOutlineBan size={20} style={{ color: 'var(--accent-warning, #f59e0b)' }} />
+              <HiOutlineBan size={20} style={{ color: 'var(--accent-warning)' }} />
               No-Class Days (Holidays & Breaks — C12)
             </h2>
             <p className="section-subtitle" style={{ marginBottom: 16 }}>
@@ -1495,6 +1496,7 @@ export default function AdminPage() {
         </div>
       )}
 
+      </div>
     </div>
   );
 }

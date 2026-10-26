@@ -8,7 +8,7 @@ import {
 } from '../utils/timezone.js';
 import { availabilityCache, clearAvailabilityCache } from './cache.js';
 
-const BUFFER_MINUTES = parseInt(process.env.BUFFER_MINUTES || '5', 10);
+const BUFFER_MINUTES = parseInt(process.env.BUFFER_MINUTES || '0', 10);
 
 /**
  * ─── AVAILABILITY ENGINE ──────────────────────────────────────────────
@@ -25,6 +25,131 @@ const BUFFER_MINUTES = parseInt(process.env.BUFFER_MINUTES || '5', 10);
  * All wall-clock times (timetable, opening hours) are interpreted in the campus
  * time zone and then converted to UTC instants before comparison.
  */
+
+/**
+ * Compute next day's full timetable and morning room availability.
+ */
+export async function getNextDayTimetableData(buildingId, targetDate, targetDow, building, rooms) {
+  const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayName = DAY_NAMES[targetDow];
+
+  const dateObj = new Date(targetDate + 'T00:00:00Z');
+  const formattedDate = dateObj.toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+
+  const noClassRes = await query(
+    'SELECT * FROM no_class_days WHERE building_id = $1 AND date = $2',
+    [buildingId, targetDate]
+  );
+  const isNoClassDay = noClassRes.rows.length > 0;
+  const noClassReason = isNoClassDay ? (noClassRes.rows[0].reason || 'Holiday / Break') : null;
+
+  const buildingClosure = await getActiveBuildingClosure(buildingId, targetDate, null);
+
+  const classesRes = await query(`
+    SELECT te.id, te.room_id, r.name as room_name, r.floor, r.capacity,
+           te.course_name, te.teacher, te.start_time, te.end_time, te.entry_type,
+           g.name as group_name, b.year as batch_year
+    FROM timetable_entries te
+    JOIN rooms r ON te.room_id = r.id
+    LEFT JOIN timetable_entry_groups teg ON te.id = teg.timetable_entry_id
+    LEFT JOIN groups g ON teg.group_id = g.id
+    LEFT JOIN terms t ON te.term_id = t.id
+    LEFT JOIN batches b ON t.batch_id = b.id
+    WHERE r.building_id = $1
+      AND te.day_of_week = $2
+      AND te.valid_from <= $3
+      AND te.valid_to >= $3
+    ORDER BY te.start_time, r.name
+  `, [buildingId, targetDow, targetDate]);
+
+  const classes = classesRes.rows.map((row) => ({
+    id: row.id,
+    room_id: row.room_id,
+    room_name: row.room_name,
+    floor: row.floor,
+    capacity: row.capacity,
+    course_name: row.course_name,
+    teacher: row.teacher,
+    start_time: String(row.start_time).slice(0, 5),
+    end_time: String(row.end_time).slice(0, 5),
+    entry_type: row.entry_type || 'class',
+    group_name: row.group_name || 'All',
+    batch_year: row.batch_year,
+  }));
+
+  const openingTime = String(building.opening_time || '06:00').slice(0, 5);
+  const closingTime = String(building.closing_time || '22:00').slice(0, 5);
+  const targetDayStart = zonedTimeToUtc(targetDate, openingTime);
+  const targetDayEnd = zonedTimeToUtc(targetDate, closingTime);
+
+  const nextRooms = [];
+  for (const room of rooms) {
+    if (buildingClosure) {
+      nextRooms.push({
+        ...room,
+        status: 'closed',
+        is_next_day: true,
+        opens_at: openingTime,
+        closure_reason: buildingClosure.reason || 'Exam',
+      });
+      continue;
+    }
+
+    const roomClasses = classes.filter((c) => c.room_id === room.id);
+    roomClasses.sort((a, b) => a.start_time.localeCompare(b.start_time));
+    const firstClass = roomClasses[0] || null;
+
+    let freeUntilUtc = targetDayEnd;
+    let freeUntilTime = closingTime;
+    if (firstClass) {
+      freeUntilUtc = zonedTimeToUtc(targetDate, firstClass.start_time);
+      freeUntilTime = firstClass.start_time;
+    }
+
+    const freeMin = Math.max(0, Math.round((freeUntilUtc - targetDayStart) / 60000));
+
+    nextRooms.push({
+      ...room,
+      status: 'free',
+      is_next_day: true,
+      opens_at: openingTime,
+      free_until: freeUntilUtc.toISOString(),
+      free_duration: freeMin,
+      free_until_time: freeUntilTime,
+      first_class: firstClass ? {
+        course_name: firstClass.course_name,
+        start_time: firstClass.start_time,
+        end_time: firstClass.end_time,
+        teacher: firstClass.teacher,
+        group: firstClass.group_name,
+      } : null,
+    });
+  }
+
+  nextRooms.sort(
+    (a, b) =>
+      b.free_duration - a.free_duration ||
+      String(a.floor).localeCompare(String(b.floor)) ||
+      String(a.name).localeCompare(String(b.name))
+  );
+
+  return {
+    date: targetDate,
+    day_of_week: targetDow,
+    day_name: dayName,
+    formatted_date: formattedDate,
+    opening_time: openingTime,
+    closing_time: closingTime,
+    is_no_class_day: isNoClassDay,
+    no_class_reason: noClassReason,
+    rooms: nextRooms,
+    classes,
+  };
+}
 
 /**
  * Get all rooms with their availability status for a given moment.
@@ -59,15 +184,56 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
   // Check building operating hours (06:00 to 22:00)
   const dayStart = zonedTimeToUtc(dateStr, building.opening_time || '06:00');
   const dayEnd = zonedTimeToUtc(dateStr, building.closing_time || '22:00');
+  const isClosedHours = (now < dayStart || now >= dayEnd);
 
-  if (now < dayStart || now >= dayEnd) {
-    return {
+  // Check last class of today
+  const todayLastClassRes = await query(`
+    SELECT MAX(te.end_time) as max_end
+    FROM timetable_entries te
+    JOIN rooms r ON te.room_id = r.id
+    WHERE r.building_id = $1
+      AND te.day_of_week = $2
+      AND te.valid_from <= $3
+      AND te.valid_to >= $3
+  `, [buildingId, dayOfWeek, dateStr]);
+
+  const maxEndStr = todayLastClassRes.rows[0]?.max_end;
+  let isAfterLastClass = false;
+  if (maxEndStr) {
+    const todayLastClassUtc = zonedTimeToUtc(dateStr, String(maxEndStr).slice(0, 5));
+    if (now >= todayLastClassUtc) {
+      isAfterLastClass = true;
+    }
+  }
+
+  // Determine next class day
+  let nextDateStr = dateStr;
+  if (now >= dayEnd || isAfterLastClass) {
+    nextDateStr = addDaysToDateStr(dateStr, 1);
+  } else if (now < dayStart) {
+    nextDateStr = dateStr;
+  }
+  let nextDow = dayOfWeekForDateStr(nextDateStr);
+  if (nextDow === 0) {
+    nextDateStr = addDaysToDateStr(nextDateStr, 1);
+    nextDow = 1;
+  }
+
+  if (isClosedHours) {
+    const nextDay = await getNextDayTimetableData(buildingId, nextDateStr, nextDow, building, rooms);
+    const buildingClosedResult = {
       status: 'building_closed',
-      reason: `Building is currently closed. Operating hours are ${building.opening_time || '06:00'} to ${building.closing_time || '22:00'}.`,
+      reason: `Building is currently closed. Operating hours are ${String(building.opening_time || '06:00').slice(0, 5)} to ${String(building.closing_time || '22:00').slice(0, 5)}.`,
+      is_after_last_class: true,
       rooms: [],
       closed_rooms: [],
       coverage,
+      next_day: nextDay,
     };
+    if (!bypassCache) {
+      availabilityCache.set(cacheKey, buildingClosedResult);
+    }
+    return buildingClosedResult;
   }
 
   // C9: Check for active building closures on this date
@@ -155,7 +321,33 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
       String(a.name).localeCompare(String(b.name))
   );
 
-  const finalResult = { status: 'ok', rooms: results, closed_rooms: closedResults, coverage };
+  const nextDay = await getNextDayTimetableData(buildingId, nextDateStr, nextDow, building, rooms);
+
+  if (isAfterLastClass) {
+    const afterLastClassResult = {
+      status: 'after_hours',
+      reason: 'All classes for today have ended.',
+      is_after_last_class: true,
+      last_class_time: maxEndStr,
+      rooms: results,
+      closed_rooms: closedResults,
+      coverage,
+      next_day: nextDay,
+    };
+    if (!bypassCache) {
+      availabilityCache.set(cacheKey, afterLastClassResult);
+    }
+    return afterLastClassResult;
+  }
+
+  const finalResult = {
+    status: 'ok',
+    is_after_last_class: false,
+    rooms: results,
+    closed_rooms: closedResults,
+    coverage,
+    next_day: nextDay,
+  };
   if (!bypassCache) {
     availabilityCache.set(cacheKey, finalResult);
   }
@@ -190,6 +382,8 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
 
   const windowStart = zonedTimeToUtc(date, startTime);
   const windowEnd = zonedTimeToUtc(date, endTime);
+  const dayStart = zonedTimeToUtc(date, building.opening_time || '06:00');
+  const dayEnd = zonedTimeToUtc(date, building.closing_time || '22:00');
 
   // C9: Check for active building closure overlapping the window
   const buildingClosure = await getOverlappingBuildingClosure(buildingId, date, windowStart, windowEnd);
@@ -254,14 +448,27 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
         busy_blocks: availability.busy_blocks,
       });
     } else {
-      const isFreeForWindow = availability.free_intervals.some(
+      const matchingInterval = availability.free_intervals.find(
         (interval) => interval.start <= windowStart && interval.end >= windowEnd
       );
 
-      if (isFreeForWindow) {
+      if (matchingInterval) {
+        const isFreeUntilClose = matchingInterval.end >= dayEnd;
+        const nextBusy = availability.busy_blocks
+          .filter((b) => b.start >= windowEnd)
+          .sort((a, b) => a.start - b.start)[0] || null;
+
         results.push({
           ...room,
           status: 'free_for_window',
+          free_until: isFreeUntilClose ? dayEnd : (nextBusy ? nextBusy.start : matchingInterval.end),
+          free_start: matchingInterval.start,
+          next_event: nextBusy ? {
+            title: nextBusy.subject_name || nextBusy.title || nextBusy.course_name,
+            start: nextBusy.start,
+            end: nextBusy.end,
+            teacher: nextBusy.teacher,
+          } : null,
           busy_blocks: availability.busy_blocks,
         });
       }
@@ -380,11 +587,13 @@ async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now =
     }
   }
 
-  busyBlocks = busyBlocks.map((block) => ({
-    ...block,
-    start: new Date(block.start.getTime() - BUFFER_MINUTES * 60000),
-    end: new Date(block.end.getTime() + BUFFER_MINUTES * 60000),
-  }));
+  if (BUFFER_MINUTES > 0) {
+    busyBlocks = busyBlocks.map((block) => ({
+      ...block,
+      start: new Date(block.start.getTime() - BUFFER_MINUTES * 60000),
+      end: new Date(block.end.getTime() + BUFFER_MINUTES * 60000),
+    }));
+  }
 
   // C7: closures rank above timetable
   const closureBlocks = await getClosureOccurrences(room, childRooms, dateStr, building);

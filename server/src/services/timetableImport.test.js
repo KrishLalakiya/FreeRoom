@@ -175,4 +175,25 @@ describe('Sheet differences handling (C21)', () => {
     expect(parsed.isLabOnly).toBe(true);
     expect(parsed.entryType).toBe('lab');
   });
+
+  it('handles Claas spelling typo in room name', () => {
+    const parsed = parseClassCell('ICP - 2030\nGrp A\n(Akansha)\nClaas A 2nd floor');
+    expect(parsed).toBeDefined();
+    expect(parsed.roomName).toBe('Claas A 2nd floor');
+    expect(parsed.teacher).toBe('Akansha');
+    expect(parsed.groups).toEqual(['A']);
+    expect(normalizeRoomKey(parsed.roomName)).toBe('class a 2nd floor');
+  });
+
+  it('handles Class B 2nd floor and Class B1 2nd floor', () => {
+    const parsedB = parseClassCell('Web Dev - 2030 Grp A (Shubham) Class B 2nd floor');
+    expect(parsedB).toBeDefined();
+    expect(parsedB.roomName).toBe('Class B 2nd floor');
+    expect(normalizeRoomKey(parsedB.roomName)).toBe('class b 2nd floor');
+
+    const parsedB1 = parseClassCell('English - 2030 Grp C (Dr. Noor) Class B1 2nd floor');
+    expect(parsedB1).toBeDefined();
+    expect(parsedB1.roomName).toBe('Class B1 2nd floor');
+    expect(normalizeRoomKey(parsedB1.roomName)).toBe('class b1 2nd floor');
+  });
 });

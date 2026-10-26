@@ -48,20 +48,16 @@ export default function LoginPage() {
 
   return (
     <div className="login-page">
-      <div className="card login-card fade-in">
-        {/* Logo */}
+      <div className="login-card fade-in">
         <div className="login-logo">FR</div>
 
-        <h1 className="login-title">
-          Find your <span style={{ color: 'var(--accent-success)' }}>free</span> room
-        </h1>
+        <h1 className="login-title">FreeRoom</h1>
         <p className="login-subtitle">
-          See which classrooms are empty right now and how long they'll stay free.
+          See which classrooms are empty right now and how long they stay free.
         </p>
 
-        {/* Google Sign-In button placeholder */}
         <button className="google-btn" disabled title="Configure GOOGLE_CLIENT_ID in .env">
-          <svg width="20" height="20" viewBox="0 0 48 48">
+          <svg width="18" height="18" viewBox="0 0 48 48">
             <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
             <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
             <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
@@ -74,23 +70,24 @@ export default function LoginPage() {
           <span>dev mode</span>
         </div>
 
-        {/* Dev Login Form */}
-        <form onSubmit={handleDevLogin}>
+        <form onSubmit={handleDevLogin} style={{ textAlign: 'left' }}>
           <div className="input-group">
+            <label className="form-label" htmlFor="dev-login-email">Email</label>
             <input
               type="email"
               className="input-field"
-              placeholder="Email address"
+              placeholder="you@sst.scaler.com"
               value={devEmail}
               onChange={(e) => setDevEmail(e.target.value)}
               id="dev-login-email"
             />
           </div>
           <div className="input-group">
+            <label className="form-label" htmlFor="dev-login-name">Name (optional)</label>
             <input
               type="text"
               className="input-field"
-              placeholder="Your name (optional)"
+              placeholder="Your name"
               value={devName}
               onChange={(e) => setDevName(e.target.value)}
               id="dev-login-name"
@@ -102,14 +99,14 @@ export default function LoginPage() {
             disabled={loading}
             id="dev-login-submit"
           >
-            <HiOutlineMail size={18} />
-            {loading ? 'Signing in...' : 'Dev Sign In'}
+            <HiOutlineMail size={17} />
+            {loading ? 'Signing in...' : 'Continue'}
           </button>
         </form>
 
         <button
           className="btn btn-secondary btn-full"
-          style={{ marginTop: '12px' }}
+          style={{ marginTop: '10px' }}
           onClick={handleAdminLogin}
           disabled={loading}
           id="admin-login-btn"

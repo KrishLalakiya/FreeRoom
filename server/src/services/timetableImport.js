@@ -21,6 +21,11 @@ const DEFAULT_STEP_MINUTES = 15;
 export function normalizeRoomKey(name) {
   return String(name || '')
     .toLowerCase()
+    .replace(/\bcla+s+\b/gi, 'class')
+    .replace(/\bclss\b/gi, 'class')
+    .replace(/\bist\b/gi, '1st')
+    .replace(/\bfirst\b/gi, '1st')
+    .replace(/\bsecond\b/gi, '2nd')
     .replace(/[,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -132,12 +137,12 @@ export function parseClassCell(raw) {
     const remainingLines = [];
     for (const line of lines) {
       const tMatch = line.match(/^\(([^)]+)\)$/);
-      if (tMatch && !/(classroom|class|floor|ground)/i.test(tMatch[1])) {
+      if (tMatch && !/(classroom|cla?a?ss(?:room)?|clss|floor|ground)/i.test(tMatch[1])) {
         teacher = tMatch[1].trim();
         continue;
       }
 
-      if (!roomName && /(classroom|class\s+[a-c]|c\s*groundfloor|ground\s*floor|[12][a-c]\b)/i.test(line)) {
+      if (!roomName && /(classroom|cla?a?ss(?:room)?|clss|c\s*groundfloor|ground\s*floor|[12][a-c]\b|\b\d+(?:st|nd|rd|th)?\s*floor\b|\bfloor\b)/i.test(line)) {
         roomName = line.trim();
         continue;
       }
@@ -198,6 +203,14 @@ export function parseClassCell(raw) {
 
   if (parts.length >= 2 && !roomName) {
     roomName = parts.pop();
+  }
+
+  if (!roomName) {
+    const roomMatch = rest.match(/\b(?:(?:classroom|cla?a?ss(?:room)?|clss|room)\s+[12]?[a-c]\b.*|c\s*groundfloor|ground\s*floor|[12][a-c]\b|\b\d+(?:st|nd|rd|th)?\s*floor\b.*)/i);
+    if (roomMatch) {
+      roomName = roomMatch[0].trim();
+      rest = rest.replace(roomMatch[0], ' ');
+    }
   }
 
   const course = parts
@@ -346,7 +359,7 @@ function findGroupHeaders(grid, rows, cols) {
       const value = grid[r][c];
       if (typeof value !== 'string') continue;
       const clean = value.replace(/\s+/g, ' ').trim();
-      const match = clean.match(/\b(?:group|grp)\.?\s*[:\-]?\s*([abc])\b/i);
+      const match = clean.match(/\b(?:group|grp)\.?\s*[:\-]?\s*([a-z0-9]+)\b/i);
       if (match) {
         headers.push({ row: r, col: c, group: match[1].toUpperCase() });
       }
@@ -424,6 +437,10 @@ export function parseTimetableWorkbook(buffer) {
   const warnings = [];
 
   for (const section of sections) {
+    // Skip Group E totally (new off-campus EC SST Classroom)
+    if (section.group === 'E') {
+      continue;
+    }
     const header =
       findDayHeader(
         grid,
@@ -464,6 +481,15 @@ export function parseTimetableWorkbook(buffer) {
         const merge = anchorAt.get(`${r},${col}`);
         const endRow = merge ? merge.r2 : r;
 
+        const rawStr = String(value);
+        if (
+          section.group === 'E' ||
+          /\b(?:group|grp)\.?\s*e\b/i.test(rawStr) ||
+          /ec\s*sst/i.test(rawStr)
+        ) {
+          continue; // Skip Group E totally (new off-campus EC SST Classroom)
+        }
+
         const parsed = parseClassCell(value);
         if (!parsed) {
           warnings.push({
@@ -474,6 +500,13 @@ export function parseTimetableWorkbook(buffer) {
             reason: 'Cell is not a readable class (course, group, teacher, room).',
           });
           continue;
+        }
+
+        if (
+          parsed.group === 'E' ||
+          (parsed.groups && parsed.groups.includes('E'))
+        ) {
+          continue; // Skip Group E totally (new off-campus EC SST Classroom)
         }
 
         const startMinutes = resolver.resolve(r);
@@ -640,6 +673,49 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
       aliasRes.rows.map((row) => [normalizeRoomKey(row.alias), row.room_id])
     );
 
+    // Auto-seed standard room aliases for common variations (Class B 2nd floor, Claas A, etc.)
+    const defaultAliases = [
+      { pattern: /2b1/i, floor: '2nd', alias: 'Class B1 2nd floor' },
+      { pattern: /2b1/i, floor: '2nd', alias: 'Classroom B1 2nd floor' },
+      { pattern: /2b2/i, floor: '2nd', alias: 'Class B2 2nd floor' },
+      { pattern: /2b2/i, floor: '2nd', alias: 'Classroom B2 2nd floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'Class B 2nd floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'Classroom B 2nd floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'Class B, 2nd Floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'Classroom B, 2nd Floor' },
+      { pattern: /2a/i, floor: '2nd', alias: 'Class A 2nd floor' },
+      { pattern: /2a/i, floor: '2nd', alias: 'Claas A 2nd floor' },
+      { pattern: /2a/i, floor: '2nd', alias: 'Classroom A 2nd floor' },
+      { pattern: /2a/i, floor: '2nd', alias: 'Classroom A, 2nd Floor' },
+      { pattern: /2c/i, floor: '2nd', alias: 'Class C 2nd floor' },
+      { pattern: /2c/i, floor: '2nd', alias: 'Classroom C 2nd floor' },
+      { pattern: /2c/i, floor: '2nd', alias: 'Classroom C, 2nd Floor' },
+      { pattern: /1a/i, floor: '1st', alias: 'Class A 1st floor' },
+      { pattern: /1a/i, floor: '1st', alias: 'Classroom A 1st floor' },
+      { pattern: /1b/i, floor: '1st', alias: 'Class B 1st floor' },
+      { pattern: /1b/i, floor: '1st', alias: 'Classroom B 1st floor' },
+      { pattern: /^c$/i, floor: 'Ground', alias: 'Class C Ground floor' },
+      { pattern: /^c$/i, floor: 'Ground', alias: 'Classroom C' },
+      { pattern: /^c$/i, floor: 'Ground', alias: 'C groundfloor' },
+    ];
+
+    for (const def of defaultAliases) {
+      for (const r of roomsById.values()) {
+        if (def.pattern.test(r.name) && (!def.floor || r.floor?.toLowerCase().includes(def.floor.toLowerCase()))) {
+          const norm = normalizeRoomKey(def.alias);
+          if (!aliasByKey.has(norm)) {
+            aliasByKey.set(norm, r.id);
+            try {
+              await client.query(
+                `INSERT INTO room_aliases (alias, room_id) VALUES ($1, $2) ON CONFLICT (alias) DO NOTHING`,
+                [def.alias, r.id]
+              );
+            } catch {}
+          }
+        }
+      }
+    }
+
     const resolveRoomId = (name) => {
       const key = normalizeRoomKey(name);
       if (!key) return null;
@@ -647,27 +723,42 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
       if (roomByKey.has(key)) return roomByKey.get(key).id;
 
       // PRD v2 C21 room variations fallback matching
-      if (/c\s*(?:ground\s*floor|groundfloor)/i.test(key) || /(?:ground\s*floor|groundfloor)\s*.*c/i.test(key) || key === 'c ground floor' || key === 'class c ground floor') {
+      if (/c\s*(?:ground\s*floor|groundfloor)/i.test(key) || /(?:ground\s*floor|groundfloor)\s*.*c/i.test(key) || key === 'c ground floor' || key === 'class c ground floor' || key === 'classroom c') {
         for (const r of roomsById.values()) {
           if (r.floor?.toLowerCase().includes('ground') && r.name.toLowerCase() === 'c') return r.id;
         }
       }
-      if (/b\s*1st\s*floor/i.test(key) || /1st\s*floor\s*.*b/i.test(key) || /\b1b\b/i.test(key)) {
+      if (/b\s*1st\s*floor/i.test(key) || /1st\s*floor\s*.*b/i.test(key) || /\b1b\b/i.test(key) || key === 'class b 1st floor' || key === 'classroom b 1st floor') {
         for (const r of roomsById.values()) {
           if (r.floor?.toLowerCase().includes('1st') && (r.name.toLowerCase() === '1b' || r.name.toLowerCase() === 'b')) return r.id;
         }
       }
-      if (/a\s*(?:1st|ist)\s*floor/i.test(key) || /(?:1st|ist)\s*floor\s*.*a/i.test(key) || /\b1a\b/i.test(key)) {
+      if (/a\s*(?:1st|ist)\s*floor/i.test(key) || /(?:1st|ist)\s*floor\s*.*a/i.test(key) || /\b1a\b/i.test(key) || key === 'class a 1st floor' || key === 'classroom a 1st floor') {
         for (const r of roomsById.values()) {
           if (r.floor?.toLowerCase().includes('1st') && (r.name.toLowerCase() === '1a' || r.name.toLowerCase() === 'a')) return r.id;
         }
       }
-      if (/a\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*a/i.test(key) || /\b2a\b/i.test(key)) {
+      if (/a\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*a/i.test(key) || /\b2a\b/i.test(key) || key === 'class a 2nd floor' || key === 'classroom a 2nd floor') {
         for (const r of roomsById.values()) {
           if (r.floor?.toLowerCase().includes('2nd') && (r.name.toLowerCase() === '2a' || r.name.toLowerCase() === 'a')) return r.id;
         }
       }
-      if (/c\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*c/i.test(key) || /\b2c\b/i.test(key)) {
+      if (/b1\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*b1/i.test(key) || /\b2b1\b/i.test(key) || key === 'class b1 2nd floor' || key === 'classroom b1 2nd floor') {
+        for (const r of roomsById.values()) {
+          if (r.floor?.toLowerCase().includes('2nd') && (r.name.toLowerCase() === '2b1' || r.name.toLowerCase() === 'b1')) return r.id;
+        }
+      }
+      if (/b2\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*b2/i.test(key) || /\b2b2\b/i.test(key) || key === 'class b2 2nd floor' || key === 'classroom b2 2nd floor') {
+        for (const r of roomsById.values()) {
+          if (r.floor?.toLowerCase().includes('2nd') && (r.name.toLowerCase() === '2b2' || r.name.toLowerCase() === 'b2')) return r.id;
+        }
+      }
+      if (/b\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*b/i.test(key) || /\b2b\b/i.test(key) || key === 'class b 2nd floor' || key === 'classroom b 2nd floor') {
+        for (const r of roomsById.values()) {
+          if (r.floor?.toLowerCase().includes('2nd') && (r.name.toLowerCase() === '2b' || r.name.toLowerCase() === 'b')) return r.id;
+        }
+      }
+      if (/c\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*c/i.test(key) || /\b2c\b/i.test(key) || key === 'class c 2nd floor' || key === 'classroom c 2nd floor') {
         for (const r of roomsById.values()) {
           if (r.floor?.toLowerCase().includes('2nd') && (r.name.toLowerCase() === '2c' || r.name.toLowerCase() === 'c')) return r.id;
         }
@@ -764,6 +855,17 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
     let duplicates = 0;
 
     for (const cls of parsed.classes) {
+      // Skip Group E totally (new off-campus EC SST Classroom)
+      const isGroupE =
+        cls.group === 'E' ||
+        (cls.groups && cls.groups.includes('E')) ||
+        /\b(?:group|grp)\.?\s*e\b/i.test(cls.raw || '') ||
+        /ec\s*sst/i.test(cls.raw || '');
+
+      if (isGroupE) {
+        continue;
+      }
+
       // C11: A timetable row outside its term's dates is rejected with a row error
       if (cls.date && termStart && termEnd && (cls.date < termStart || cls.date > termEnd)) {
         errors.push({

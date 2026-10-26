@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { roomsAPI, reportsAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import Navbar from '../components/Navbar';
+import DatePicker, { getTomorrowStr } from '../components/DatePicker';
 import {
   HiOutlineArrowLeft,
   HiOutlineLocationMarker,
@@ -10,23 +11,38 @@ import {
   HiOutlineExclamationCircle,
   HiOutlineCheckCircle,
   HiOutlineInformationCircle,
+  HiOutlineClock,
 } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 
 function formatTime(dateOrStr) {
   if (!dateOrStr) return '--';
   const d = new Date(dateOrStr);
+  if (isNaN(d.getTime())) return '--';
   return d.toLocaleTimeString('en-IN', {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true,
-  });
+  }).toLowerCase();
 }
 
-function formatDate(dateStr) {
+function formatTime12Simple(tStr) {
+  if (!tStr) return '';
+  const parts = String(tStr).split(':');
+  if (parts.length < 2) return tStr;
+  const hr = parseInt(parts[0], 10);
+  const min = parts[1];
+  const ampm = hr >= 12 ? 'pm' : 'am';
+  const hr12 = hr % 12 || 12;
+  return `${hr12}:${min} ${ampm}`;
+}
+
+function formatDateHeading(dateStr) {
   if (!dateStr) return '';
-  const d = new Date(dateStr + 'T00:00:00');
-  return d.toLocaleDateString('en-US', {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  if (!y || !m || !d) return dateStr;
+  const dateObj = new Date(y, m - 1, d);
+  return dateObj.toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'short',
     day: 'numeric',
@@ -34,38 +50,40 @@ function formatDate(dateStr) {
   });
 }
 
-function renderTypeBadge(entryType) {
+function renderTypeChip(entryType) {
   const type = (entryType || 'class').toLowerCase();
   if (type === 'lab') {
-    return <span className="room-card-badge badge-lab">🔬 Lab</span>;
+    return <span className="schedule-type-chip lab">🔬 Lab</span>;
   }
   if (type === 'club') {
-    return <span className="room-card-badge badge-club">🎯 Club</span>;
+    return <span className="schedule-type-chip club">🎯 Club</span>;
   }
   if (type === 'tutorial') {
-    return <span className="room-card-badge badge-tutorial">📝 Tutorial</span>;
+    return <span className="schedule-type-chip tutorial">📝 Tutorial</span>;
   }
-  return <span className="room-card-badge badge-lecture">📚 Lecture</span>;
+  return <span className="schedule-type-chip lecture">📚 Lecture</span>;
 }
 
 export default function RoomDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { isAdmin } = useAuth();
+
+  const tomorrowStr = getTomorrowStr();
+  const [selectedDate, setSelectedDate] = useState(() => {
+    return searchParams.get('date') || localStorage.getItem('freeroom_find_date') || tomorrowStr;
+  });
+
   const [timeline, setTimeline] = useState(null);
   const [loading, setLoading] = useState(true);
   const [reporting, setReporting] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedProvenance, setSelectedProvenance] = useState(null);
 
-  useEffect(() => {
-    fetchTimeline();
-  }, [id, selectedDate]);
-
-  const fetchTimeline = async () => {
+  const fetchTimeline = async (dateToFetch) => {
     setLoading(true);
     try {
-      const res = await roomsAPI.getTimeline(id, selectedDate);
+      const res = await roomsAPI.getTimeline(id, dateToFetch);
       setTimeline(res.data);
     } catch (err) {
       console.error('Failed to fetch timeline:', err);
@@ -73,6 +91,15 @@ export default function RoomDetailPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  useEffect(() => {
+    fetchTimeline(selectedDate);
+  }, [id, selectedDate]);
+
+  const handleDateChange = (newDate) => {
+    setSelectedDate(newDate);
+    localStorage.setItem('freeroom_find_date', newDate);
   };
 
   const handleReport = async (status) => {
@@ -86,7 +113,7 @@ export default function RoomDetailPage() {
           ? 'Flagged for admin review'
           : 'Report submitted. Thanks for keeping the schedule accurate!';
       toast.success(msg);
-      fetchTimeline();
+      fetchTimeline(selectedDate);
     } catch (err) {
       if (err.response?.status === 429) {
         toast.error(err.response.data.message);
@@ -104,371 +131,379 @@ export default function RoomDetailPage() {
     return buildTimelineItems(timeline);
   }, [timeline]);
 
-  // Compute visual bar segments (06:00 AM to 10:00 PM)
+  // Robust visual day bar calculation (bounded 6:00 AM to 10:00 PM)
   const visualSegments = useMemo(() => {
-    if (!timeline || !timeline.busy_blocks || !timeline.free_intervals) return [];
+    if (!timeline || (!timeline.busy_blocks && !timeline.free_intervals)) return [];
 
-    const dateStr = selectedDate;
-    const dayStart = new Date(`${dateStr}T${timeline.opening_time || '06:00'}:00`);
-    const dayEnd = new Date(`${dateStr}T${timeline.closing_time || '22:00'}:00`);
-    const totalMs = dayEnd - dayStart;
+    const parseTimeToMins = (tStr, defaultMins) => {
+      if (!tStr) return defaultMins;
+      const parts = String(tStr).split(':');
+      if (parts.length >= 2) {
+        return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+      }
+      return defaultMins;
+    };
 
-    if (totalMs <= 0) return [];
+    const openMins = parseTimeToMins(timeline.opening_time, 6 * 60); // 360
+    const closeMins = parseTimeToMins(timeline.closing_time, 22 * 60); // 1320
+    const totalDayMins = closeMins - openMins;
+    if (totalDayMins <= 0) return [];
 
     const segments = [];
     for (const item of timelineItems) {
-      const start = new Date(item.start);
-      const end = new Date(item.end);
+      const dStart = new Date(item.start);
+      const dEnd = new Date(item.end);
+      if (isNaN(dStart.getTime()) || isNaN(dEnd.getTime())) continue;
 
-      const boundedStart = Math.max(start, dayStart);
-      const boundedEnd = Math.min(end, dayEnd);
+      const itemStartMins = dStart.getHours() * 60 + dStart.getMinutes();
+      const itemEndMins = dEnd.getHours() * 60 + dEnd.getMinutes();
+
+      const boundedStart = Math.max(openMins, itemStartMins);
+      const boundedEnd = Math.min(closeMins, itemEndMins);
 
       if (boundedEnd > boundedStart) {
-        const widthPercent = ((boundedEnd - boundedStart) / totalMs) * 100;
+        const widthPercent = ((boundedEnd - boundedStart) / totalDayMins) * 100;
         segments.push({
           ...item,
           is_closure: !!item.is_closure,
           reason: item.reason,
-          widthPercent,
-          formattedStart: formatTime(start),
-          formattedEnd: formatTime(end),
+          widthPercent: Math.max(widthPercent, 0.4),
+          formattedStart: formatTime(dStart),
+          formattedEnd: formatTime(dEnd),
         });
       }
     }
     return segments;
-  }, [timeline, timelineItems, selectedDate]);
+  }, [timeline, timelineItems]);
 
   if (loading && !timeline) {
     return (
-      <div className="app-container">
+      <div className="freeroom-app">
         <Navbar />
-        <div className="loading-spinner">
-          <div className="spinner" />
-        </div>
+        <main className="app-main">
+          <div style={{ textAlign: 'center', padding: '80px 20px', color: 'var(--text-secondary)' }}>
+            Loading room schedule…
+          </div>
+        </main>
       </div>
     );
   }
 
   if (!timeline) {
     return (
-      <div className="app-container">
+      <div className="freeroom-app">
         <Navbar />
-        <div className="empty-state">
-          <div className="empty-state-icon">❌</div>
-          <div className="empty-state-title">Room not found</div>
-          <button className="btn btn-primary" onClick={() => navigate('/')}>
-            Back to Dashboard
-          </button>
-        </div>
+        <main className="app-main">
+          <div className="detail-card" style={{ textAlign: 'center', padding: '60px 20px', maxWidth: 480, margin: '40px auto' }}>
+            <div style={{ fontSize: '32px', marginBottom: 12 }}>🏫</div>
+            <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: 8 }}>Room not found</h2>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: 20 }}>
+              The classroom requested could not be located in this campus building.
+            </p>
+            <button className="detail-back-btn" onClick={() => navigate('/rooms')}>
+              Back to Rooms
+            </button>
+          </div>
+        </main>
       </div>
     );
   }
 
   const isFree = timeline.status === 'free';
   const isClosed = timeline.status === 'closed';
-  const statusMeta =
-    {
-      free: { label: 'Free Now', className: 'status-free', dot: 'status-dot-free' },
-      busy: { label: 'Occupied Now', className: 'status-busy', dot: 'status-dot-busy' },
-      scheduled: { label: 'Scheduled', className: 'status-free', dot: 'status-dot-free' },
-      closed: { label: `Closed (${timeline.reason || 'Exam'})`, className: 'status-closed', dot: 'status-dot-closed' },
-      unknown: { label: 'Schedule Unknown', className: 'status-unknown', dot: 'status-dot-busy' },
-    }[timeline.status] || { label: 'Unknown', className: 'status-busy', dot: 'status-dot-busy' };
   const isDividable = timeline.name === '2B';
   const isSplit = timeline.name === '2B1' || timeline.name === '2B2' || !!timeline.parent_room_id;
 
+  const statusLabel = (() => {
+    if (isClosed) return `Closed (${timeline.reason || 'Exam'})`;
+    if (isFree) return 'Free Now';
+    if (timeline.status === 'scheduled') return 'Scheduled';
+    if (timeline.status === 'busy') return 'Occupied Now';
+    return 'Schedule Unknown';
+  })();
+
+  const opHoursFormatted = `${formatTime12Simple(timeline.opening_time || '06:00')} – ${formatTime12Simple(timeline.closing_time || '22:00')}`;
+
   return (
-    <div className="app-container">
+    <div className="freeroom-app">
       <Navbar />
+      <main className="app-main">
+        <div className="room-detail-container">
+          {/* Navigation Bar */}
+          <button className="detail-back-btn" onClick={() => navigate(-1)}>
+            <HiOutlineArrowLeft size={15} />
+            <span>Back to Rooms</span>
+          </button>
 
-      <button className="back-btn" onClick={() => navigate('/')}>
-        <HiOutlineArrowLeft size={16} />
-        Back to all classrooms
-      </button>
-
-      <div className="fade-in">
-        <div className="room-detail-grid">
-          {/* ── Left Sidebar (Sticky on Tablet & PC) ──────────────── */}
-          <div className="room-detail-sidebar">
-            {/* Room Main Card */}
-            <div className={`card ${isClosed ? 'card-closed' : isFree ? 'card-free' : 'card-busy'}`} style={{ marginBottom: 20 }}>
-              <div className="room-card-header">
-                <div>
-                  <div className="room-card-name" style={{ fontSize: '1.6rem' }}>
-                    Room {timeline.name}
+          <div className="room-detail-layout">
+            {/* ── Left Sidebar ──────────────────────────────── */}
+            <aside className="room-detail-sidebar">
+              {/* Room Profile Card */}
+              <div className="detail-card detail-card-profile">
+                <div className="detail-room-title-row">
+                  <div>
+                    <h1 className="detail-room-name">Room {timeline.name}</h1>
                   </div>
-                  <div className="room-card-info" style={{ marginTop: 8 }}>
-                    <span className="room-card-info-item">
-                      <HiOutlineLocationMarker size={14} />
-                      {timeline.building_name} · {timeline.floor} Floor
+                  <span className={`status-badge ${isClosed ? 'status-closed' : isFree ? 'status-free' : 'status-busy'}`}>
+                    <span className={`status-dot ${isClosed ? 'status-dot-closed' : isFree ? 'status-dot-free' : 'status-dot-busy'}`} />
+                    {statusLabel}
+                  </span>
+                </div>
+
+                <div className="detail-meta-pills">
+                  <span className="detail-meta-chip">
+                    <HiOutlineLocationMarker size={14} />
+                    {timeline.building_name || 'Pilot Building'} · {timeline.floor} Floor
+                  </span>
+                  {timeline.capacity && (
+                    <span className="detail-meta-chip">
+                      <HiOutlineUsers size={14} />
+                      {timeline.capacity} seats
                     </span>
-                    {timeline.capacity && (
-                      <span className="room-card-info-item">
-                        <HiOutlineUsers size={14} />
-                        {timeline.capacity} seats
-                      </span>
-                    )}
+                  )}
+                </div>
+
+                {isDividable && (
+                  <div style={{ marginBottom: 12 }}>
+                    <span className="room-card-badge badge-dividable">
+                      Dividable Room (Combines 2B1 and 2B2)
+                    </span>
+                  </div>
+                )}
+                {isSplit && (
+                  <div style={{ marginBottom: 12 }}>
+                    <span className="room-card-badge badge-split">
+                      Split Room (Partition of Room 2B)
+                    </span>
+                  </div>
+                )}
+
+                {/* Live Availability Banner */}
+                {isFree && timeline.free_until && (
+                  <div className="detail-status-banner free">
+                    <span>🟢 Free until <strong>{formatTime(timeline.free_until)}</strong></span>
+                  </div>
+                )}
+                {isClosed && (
+                  <div className="detail-status-banner closed">
+                    <span>🚫 Closed for {timeline.reason || 'Exam'}{timeline.closed_until ? ` until ${formatTime(timeline.closed_until)}` : ' today'}</span>
+                  </div>
+                )}
+
+                {/* Crowd Verification Actions */}
+                <div style={{ marginTop: 20 }}>
+                  <div className="detail-section-label">
+                    Crowd Status Check
+                  </div>
+                  <div className="detail-crowd-actions">
+                    <button
+                      className="detail-action-btn not-empty"
+                      onClick={() => handleReport('not_empty')}
+                      disabled={reporting}
+                      title="Report room as occupied"
+                    >
+                      <HiOutlineExclamationCircle size={16} />
+                      <span>Not empty</span>
+                    </button>
+                    <button
+                      className="detail-action-btn free"
+                      onClick={() => handleReport('actually_free')}
+                      disabled={reporting}
+                      title="Report room as free"
+                    >
+                      <HiOutlineCheckCircle size={16} />
+                      <span>Actually free</span>
+                    </button>
                   </div>
                 </div>
-                <span className={`status-badge ${statusMeta.className}`}>
-                  <span className={`status-dot ${statusMeta.dot}`} />
-                  {statusMeta.label}
-                </span>
               </div>
 
-              {/* Dividable room badge */}
-              {isDividable && (
-                <div style={{ margin: '8px 0 12px' }}>
-                  <span className="room-card-badge badge-dividable">
-                    Dividable Room (Combines 2B1 and 2B2)
-                  </span>
-                </div>
-              )}
-              {isSplit && (
-                <div style={{ margin: '8px 0 12px' }}>
-                  <span className="room-card-badge badge-split">
-                    Split Room (Partition of Room 2B)
-                  </span>
-                </div>
-              )}
-
-              {isFree && timeline.free_until && (
-                <div className="free-until-text" style={{ fontSize: '1rem', marginTop: 12 }}>
-                  Free until <span className="free-until-time" style={{ fontSize: '1.15rem' }}>{formatTime(timeline.free_until)}</span>
-                </div>
-              )}
-              {isClosed && (
-                <div className="free-until-text" style={{ fontSize: '1rem', marginTop: 12, color: 'var(--accent-danger)', fontWeight: 600 }}>
-                  🚫 Closed for {timeline.reason || 'Exam'}{timeline.closed_until ? ` until ${formatTime(timeline.closed_until)}` : ' today'}
-                </div>
-              )}
-
-              {/* Crowd Reporting */}
-              <div style={{ marginTop: 18 }}>
-                <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-                  Crowd Status Check
-                </div>
-                <div className="report-actions">
-                  <button
-                    className="report-btn report-btn-not-empty"
-                    onClick={() => handleReport('not_empty')}
-                    disabled={reporting}
-                    title="Report room as occupied"
-                  >
-                    <HiOutlineExclamationCircle size={16} />
-                    Not empty
-                  </button>
-                  <button
-                    className="report-btn report-btn-free"
-                    onClick={() => handleReport('actually_free')}
-                    disabled={reporting}
-                    title="Report room as free"
-                  >
-                    <HiOutlineCheckCircle size={16} />
-                    Actually free
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Date Selector Card */}
-            <div className="card" style={{ marginBottom: 20 }}>
-              <div className="input-group" style={{ marginBottom: 0 }}>
-                <label className="input-label" htmlFor="timeline-date">Select Schedule Date</label>
-                <input
-                  type="date"
-                  className="input-field"
+              {/* Date Picker Card */}
+              <div className="detail-card detail-card-date">
+                <DatePicker
                   value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
-                  id="timeline-date"
+                  onChange={handleDateChange}
+                  label="Select Schedule Date"
+                  id="timeline-datepicker"
                 />
               </div>
-            </div>
 
-            {/* Room Info Specs */}
-            <div className="card" style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <HiOutlineInformationCircle size={16} style={{ color: 'var(--accent-primary)' }} />
-                Campus Room Specs
+              {/* Campus Room Specs Card */}
+              <div className="detail-card detail-card-specs" style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                <div style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <HiOutlineInformationCircle size={16} style={{ color: 'var(--text-secondary)' }} />
+                  Campus Room Specs
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Operating Hours:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>{opHoursFormatted}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Schedule Accuracy:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>Exact (0 min buffer)</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Building:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>{timeline.building_name || 'Pilot Building'}</strong>
+                  </div>
+                </div>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Operating Hours:</span>
-                  <span style={{ color: 'var(--text-primary)' }}>{timeline.opening_time} – {timeline.closing_time}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Transition Buffer:</span>
-                  <span style={{ color: 'var(--text-primary)' }}>5 minutes</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Building:</span>
-                  <span style={{ color: 'var(--text-primary)' }}>{timeline.building_name}</span>
-                </div>
-              </div>
-            </div>
-          </div>
+            </aside>
 
-          {/* ── Right Column: Interactive Schedule & Timeline ────── */}
-          <div className="room-detail-main">
-            {timeline.status === 'closed' && (
-              <div className="card fade-in" style={{
-                marginBottom: 20,
-                borderColor: 'var(--accent-danger)',
-                background: 'rgba(239, 68, 68, 0.12)',
-                padding: '16px 20px',
-              }}>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                  <span style={{ fontSize: '1.6rem', lineHeight: 1 }}>🚫</span>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: '1.05rem', color: 'var(--accent-danger)', marginBottom: 2 }}>
-                      Closed for {timeline.reason || 'Exam'}{timeline.closed_until ? ` until ${formatTime(timeline.closed_until)}` : ' today'}
+            {/* ── Right Content ─────────────────────────────── */}
+            <section className="room-detail-content">
+              {/* Visual Day Schedule Strip */}
+              <div className="timeline-strip-container detail-strip-container">
+                <div className="timeline-strip-title">
+                  <span>Visual Day Bar · {formatDateHeading(selectedDate)}</span>
+                  <div className="timeline-strip-legend">
+                    <div className="legend-item">
+                      <span className="legend-color" style={{ background: 'var(--green-text)' }} />
+                      <span>Free</span>
                     </div>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                      {timeline.closure_note || 'This classroom is reserved for examinations or an administrative closure. Continuous study is unavailable.'}
+                    <div className="legend-item">
+                      <span className="legend-color" style={{ background: '#64748b' }} />
+                      <span>Occupied</span>
+                    </div>
+                    <div className="legend-item">
+                      <span className="legend-color" style={{ background: 'var(--urgent-bg)' }} />
+                      <span>Closed</span>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
-            {timeline.status === 'unknown' && (
-              <div className="card" style={{ marginBottom: 20, borderColor: 'var(--accent-warning, #f59e0b)' }}>
-                <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 4 }}>
-                  Availability unknown
+
+                {/* Colored Progress Bar */}
+                <div className="timeline-visual-bar" style={{ height: 24, borderRadius: 8 }}>
+                  {visualSegments.map((seg, i) => (
+                    <div
+                      key={i}
+                      className={`timeline-segment ${
+                        seg.is_closure
+                          ? 'timeline-segment-closed'
+                          : seg.type === 'free'
+                          ? 'timeline-segment-free'
+                          : 'timeline-segment-busy'
+                      }`}
+                      style={{
+                        width: `${seg.widthPercent}%`,
+                        ...(seg.is_closure
+                          ? { background: 'var(--urgent-bg)' }
+                          : seg.type === 'free'
+                          ? { background: 'var(--green-text)' }
+                          : { background: '#64748b' }),
+                      }}
+                      title={`${
+                        seg.is_closure
+                          ? `Closed: ${seg.reason || 'Exam'}`
+                          : seg.type === 'free'
+                          ? 'Available for Study'
+                          : seg.title || 'Lecture'
+                      } (${seg.formattedStart} – ${seg.formattedEnd})`}
+                    />
+                  ))}
                 </div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                  {timeline.coverage?.valid_from
-                    ? `The timetable only covers ${timeline.coverage.valid_from} to ${timeline.coverage.valid_to}. This room is not assumed free outside that range.`
-                    : 'No timetable has been uploaded for this building yet.'}
-                </div>
-              </div>
-            )}
 
-            {/* Visual Day Schedule Strip */}
-            <div className="timeline-strip-container">
-              <div className="timeline-strip-title">
-                <span>Visual Day Bar · {formatDate(selectedDate)}</span>
-                <div className="timeline-strip-legend">
-                  <div className="legend-item">
-                    <span className="legend-color" style={{ background: '#10b981' }} />
-                    <span>Free</span>
-                  </div>
-                  <div className="legend-item">
-                    <span className="legend-color" style={{ background: '#64748b' }} />
-                    <span>Occupied</span>
-                  </div>
-                  <div className="legend-item">
-                    <span className="legend-color" style={{ background: '#ef4444' }} />
-                    <span>Closed (Exam)</span>
-                  </div>
+                {/* Hours Axis (6 AM to 10 PM) */}
+                <div className="timeline-hours-axis" style={{ marginTop: 10 }}>
+                  <span>6 AM</span>
+                  <span>10 AM</span>
+                  <span>2 PM</span>
+                  <span>6 PM</span>
+                  <span>10 PM</span>
                 </div>
               </div>
 
-              {/* Visual colored bar */}
-              <div className="timeline-visual-bar">
-                {visualSegments.map((seg, i) => (
-                  <div
-                    key={i}
-                    className={`timeline-segment ${
-                      seg.is_closure
-                        ? 'timeline-segment-closed'
-                        : seg.type === 'free'
-                        ? 'timeline-segment-free'
-                        : 'timeline-segment-busy'
-                    }`}
-                    style={{
-                      width: `${seg.widthPercent}%`,
-                      ...(seg.is_closure ? { background: '#ef4444' } : {}),
-                    }}
-                    title={`${
-                      seg.is_closure
-                        ? `Closed for ${seg.reason || 'Exam'}`
-                        : seg.type === 'free'
-                        ? 'Free'
-                        : seg.title || 'Occupied'
-                    }: ${seg.formattedStart} - ${seg.formattedEnd}`}
-                  />
-                ))}
+              {/* Detailed Schedule Breakdown */}
+              <div className="detail-breakdown-section">
+                <div style={{ marginBottom: 16 }}>
+                <h2 style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '-0.02em', marginBottom: 4 }}>
+                  Schedule Breakdown
+                </h2>
+                <p style={{ fontSize: '13.5px', color: 'var(--text-secondary)' }}>
+                  All lectures, events, and free study gaps for {formatDateHeading(selectedDate)}
+                </p>
               </div>
 
-              {/* Hours Axis (6 AM to 10 PM) */}
-              <div className="timeline-hours-axis">
-                <span>6 AM</span>
-                <span>10 AM</span>
-                <span>2 PM</span>
-                <span>6 PM</span>
-                <span>10 PM</span>
-              </div>
-            </div>
+              <div className="schedule-breakdown-list">
+                {timelineItems.map((item, i) => {
+                  const isItemFree = item.type === 'free';
+                  const isItemClosed = item.is_closure;
+                  const durationMins = Math.round((new Date(item.end) - new Date(item.start)) / 60000);
 
-            {/* Detailed Timeline List */}
-            <div className="section-header">
-              <div className="section-title">Schedule Breakdown</div>
-              <div className="section-subtitle">
-                All lectures, events, and free study gaps for {formatDate(selectedDate)}
-              </div>
-            </div>
+                  if (isItemFree) {
+                    return (
+                      <div key={i} className="schedule-item-card free-slot">
+                        <div className="schedule-time-row">
+                          <span className="schedule-time-range" style={{ color: 'var(--green-text)' }}>
+                            <HiOutlineClock style={{ display: 'inline', verticalAlign: 'middle', marginRight: 4 }} />
+                            {formatTime(item.start)} – {formatTime(item.end)}
+                          </span>
+                          <span className="schedule-type-chip free">
+                            🟢 Free
+                          </span>
+                        </div>
+                        <div className="schedule-item-title" style={{ color: '#166534', fontSize: '15px' }}>
+                          Available for Study
+                        </div>
+                        <div className="schedule-item-meta" style={{ color: '#15803d' }}>
+                          <span>{durationMins} minutes continuous study time</span>
+                        </div>
+                      </div>
+                    );
+                  }
 
-            <div className="timeline">
-              {timelineItems.map((item, i) => (
-                <div
-                  key={i}
-                  className={`timeline-item ${item.is_closure ? 'timeline-item-closed' : ''} slide-in`}
-                  style={{ animationDelay: `${i * 0.04}s` }}
-                >
-                  <div
-                    className={`timeline-dot ${
-                      item.is_closure
-                        ? 'timeline-dot-closed'
-                        : item.type === 'free'
-                        ? 'timeline-dot-free'
-                        : 'timeline-dot-busy'
-                    }`}
-                  />
-                  <div className="timeline-time">
-                    {formatTime(item.start)} — {formatTime(item.end)}
-                  </div>
-                  <div className="timeline-title">
-                    {item.is_closure ? (
-                      `🚫 ${item.reason || 'Exam'} (Room Closed)`
-                    ) : item.type === 'free' ? (
-                      '🟢 Available for Study'
-                    ) : (
-                      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                        {renderTypeBadge(item.entry_type)}
-                        <span>{item.subject_name || item.title || 'Class'}</span>
-                        {isAdmin && item.provenance?.raw_cell && (
-                          <button
-                            className="admin-inspect-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedProvenance({
+                  if (isItemClosed) {
+                    return (
+                      <div key={i} className="schedule-item-card closed-slot">
+                        <div className="schedule-time-row">
+                          <span className="schedule-time-range" style={{ color: 'var(--urgent-bg)' }}>
+                            {formatTime(item.start)} – {formatTime(item.end)}
+                          </span>
+                          <span className="schedule-type-chip closed">
+                            🚫 Closed
+                          </span>
+                        </div>
+                        <div className="schedule-item-title" style={{ color: '#991b1b' }}>
+                          Closed for {item.reason || 'Exam'}
+                        </div>
+                        <div className="schedule-item-meta" style={{ color: 'var(--urgent-bg)' }}>
+                          <span>{item.note || 'Classroom unavailable for continuous study.'}</span>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={i} className="schedule-item-card">
+                      <div className="schedule-time-row">
+                        <span className="schedule-time-range">
+                          {formatTime(item.start)} – {formatTime(item.end)}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {renderTypeChip(item.entry_type)}
+                          {isAdmin && item.provenance?.raw_cell && (
+                            <button
+                              className="admin-inspect-btn"
+                              onClick={() => setSelectedProvenance({
                                 ...item.provenance,
                                 subject: item.subject_name || item.title,
-                                time: `${formatTime(item.start)} — ${formatTime(item.end)}`,
+                                time: `${formatTime(item.start)} – ${formatTime(item.end)}`,
                                 roomName: timeline.name,
-                              });
-                            }}
-                            title="Inspect raw cell import provenance"
-                          >
-                            🔍 Provenance
-                          </button>
-                        )}
+                              })}
+                              title="Inspect raw cell import provenance"
+                            >
+                              🔍 Cell
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                  {item.type === 'free' && (
-                    <div className="timeline-subtitle" style={{ color: 'var(--accent-success)' }}>
-                      {Math.round((new Date(item.end) - new Date(item.start)) / 60000)} minutes continuous study time
-                    </div>
-                  )}
-                  {item.is_closure && (
-                    <div className="timeline-subtitle" style={{ color: 'var(--accent-danger)' }}>
-                      Closed for {item.reason || 'Exam'}{item.scope ? ` (${item.scope} closure)` : ''}{item.note ? ` · ${item.note}` : ''}
-                    </div>
-                  )}
-                  {!item.is_closure && item.type !== 'free' && (
-                    <>
-                      <div className="timeline-subtitle" style={{ marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 14 }}>
+
+                      <div className="schedule-item-title">
+                        {item.subject_name || item.title || 'Class Lecture'}
+                      </div>
+
+                      <div className="schedule-item-meta">
                         <span>
                           <strong>Instructor:</strong> {item.instructor_name || item.teacher || 'TBD'}
                         </span>
@@ -478,8 +513,9 @@ export default function RoomDetailPage() {
                           </span>
                         )}
                       </div>
-                      <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
-                        <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', fontWeight: 600 }}>Groups:</span>
+
+                      <div className="schedule-group-row">
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>Groups:</span>
                         {item.groups_list && item.groups_list.length > 0 ? (
                           item.groups_list.map((g) => (
                             <span key={g} className="group-pill">{g}</span>
@@ -488,81 +524,89 @@ export default function RoomDetailPage() {
                           <span className="group-pill">{item.group || 'All'}</span>
                         )}
                       </div>
-                    </>
-                  )}
-                </div>
-              ))}
-              {timelineItems.length === 0 && (
-                <div className="empty-state">
-                  <div className="empty-state-text">No scheduled events or timetable entries for this date</div>
-                </div>
-              )}
+                    </div>
+                  );
+                })}
+
+                {timelineItems.length === 0 && (
+                  <div className="detail-card" style={{ textAlign: 'center', padding: '48px 16px', color: 'var(--text-secondary)' }}>
+                    <div style={{ fontSize: '28px', marginBottom: 8 }}>📖</div>
+                    <div style={{ fontWeight: 700, fontSize: '15px', color: 'var(--text-primary)', marginBottom: 4 }}>
+                      No scheduled classes or events
+                    </div>
+                    <p style={{ fontSize: '13px' }}>
+                      This classroom is completely free for open study throughout the day.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
+            </section>
           </div>
         </div>
-      </div>
 
-      {/* Admin Provenance Modal (C19) */}
-      {selectedProvenance && (
-        <div className="modal-overlay" onClick={() => setSelectedProvenance(null)}>
-          <div className="modal-card fade-in" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">
-                🔍 Timetable Cell Provenance
+        {/* Admin Provenance Modal (C19) */}
+        {selectedProvenance && (
+          <div className="modal-overlay" onClick={() => setSelectedProvenance(null)}>
+            <div className="modal-card fade-in" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <div className="modal-title">
+                  🔍 Timetable Cell Provenance
+                </div>
+                <button
+                  className="modal-close-btn"
+                  onClick={() => setSelectedProvenance(null)}
+                >
+                  ✕
+                </button>
               </div>
-              <button
-                className="modal-close-btn"
-                onClick={() => setSelectedProvenance(null)}
-              >
-                ✕
-              </button>
-            </div>
 
-            <div className="provenance-grid">
-              <div className="provenance-field">
-                <div className="provenance-label">Source Spreadsheet</div>
-                <div className="provenance-value">{selectedProvenance.source_file || 'Excel File'}</div>
-              </div>
-              <div className="provenance-field">
-                <div className="provenance-label">Sheet Name</div>
-                <div className="provenance-value">{selectedProvenance.sheet_name || 'Schedule'}</div>
-              </div>
-              <div className="provenance-field">
-                <div className="provenance-label">Cell Coordinate</div>
-                <div className="provenance-value">{selectedProvenance.cell_coord || 'N/A'}</div>
-              </div>
-              <div className="provenance-field">
-                <div className="provenance-label">Imported At</div>
-                <div className="provenance-value">
-                  {selectedProvenance.imported_at
-                    ? new Date(selectedProvenance.imported_at).toLocaleString('en-IN')
-                    : 'Initial Batch Seed'}
+              <div className="provenance-grid">
+                <div className="provenance-field">
+                  <div className="provenance-label">Source Spreadsheet</div>
+                  <div className="provenance-value">{selectedProvenance.source_file || 'Excel File'}</div>
+                </div>
+                <div className="provenance-field">
+                  <div className="provenance-label">Sheet Name</div>
+                  <div className="provenance-value">{selectedProvenance.sheet_name || 'Schedule'}</div>
+                </div>
+                <div className="provenance-field">
+                  <div className="provenance-label">Cell Coordinate</div>
+                  <div className="provenance-value">{selectedProvenance.cell_coord || 'N/A'}</div>
+                </div>
+                <div className="provenance-field">
+                  <div className="provenance-label">Imported At</div>
+                  <div className="provenance-value">
+                    {selectedProvenance.imported_at
+                      ? new Date(selectedProvenance.imported_at).toLocaleString('en-IN')
+                      : 'Initial Batch Seed'}
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="provenance-field">
-              <div className="provenance-label">Class Details</div>
-              <div className="provenance-value" style={{ marginBottom: 12 }}>
-                {selectedProvenance.subject} · {selectedProvenance.time} (Room {selectedProvenance.roomName})
+              <div className="provenance-field">
+                <div className="provenance-label">Class Details</div>
+                <div className="provenance-value" style={{ marginBottom: 12 }}>
+                  {selectedProvenance.subject} · {selectedProvenance.time} (Room {selectedProvenance.roomName})
+                </div>
+              </div>
+
+              <div className="provenance-field">
+                <div className="provenance-label">Raw Cell Content from Excel</div>
+                <pre className="provenance-raw">
+                  {selectedProvenance.raw_cell || 'No raw text recorded'}
+                </pre>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+                <button className="btn btn-secondary" onClick={() => setSelectedProvenance(null)}>
+                  Close
+                </button>
               </div>
             </div>
-
-            <div className="provenance-field">
-              <div className="provenance-label">Raw Cell Content from Excel</div>
-              <pre className="provenance-raw">
-                {selectedProvenance.raw_cell || 'No raw text recorded'}
-              </pre>
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
-              <button className="btn btn-secondary" onClick={() => setSelectedProvenance(null)}>
-                Close
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </main>
     </div>
   );
 }

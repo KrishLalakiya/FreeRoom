@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { query } from '../config/db.js';
-import { getFreeRoomsNow, getFreeRoomsForWindow, getRoomTimeline } from '../services/availabilityEngine.js';
+import { getFreeRoomsNow, getFreeRoomsForWindow, getRoomTimeline, getNextDayTimetableData } from '../services/availabilityEngine.js';
 import { authenticate } from '../middleware/auth.js';
 import { toDateStr, isValidDateStr, dayOfWeekForDateStr } from '../utils/timezone.js';
 
@@ -31,8 +31,10 @@ router.get('/free-now', authenticate, async (req, res) => {
       });
     }
 
-    const now = new Date();
-    const result = await getFreeRoomsNow({ buildingId, now, minDuration, floor });
+    const mockTime = req.query.now || req.headers['x-mock-time'];
+    const now = mockTime ? new Date(mockTime) : new Date();
+    const bypassCache = !!mockTime;
+    const result = await getFreeRoomsNow({ buildingId, now, minDuration, floor, bypassCache });
 
     res.json({
       query: { buildingId, minDuration, floor, timestamp: now.toISOString() },
@@ -44,10 +46,42 @@ router.get('/free-now', authenticate, async (req, res) => {
       count: result.rooms.length,
       rooms: result.rooms,
       closed_rooms: result.closed_rooms || [],
+      is_after_last_class: !!result.is_after_last_class,
+      next_day: result.next_day || null,
     });
   } catch (err) {
     console.error('Free-now error:', err);
     res.status(500).json({ error: 'Failed to fetch free rooms' });
+  }
+});
+
+/**
+ * GET /api/rooms/next-timetable
+ * Get full timetable and morning room availability for a specific day.
+ */
+router.get('/next-timetable', authenticate, async (req, res) => {
+  try {
+    const buildingId = parseInt(req.query.buildingId || '1', 10);
+    let date = req.query.date;
+    if (!date || !isValidDateStr(date)) {
+      date = toDateStr();
+    }
+
+    const buildingRes = await query('SELECT * FROM buildings WHERE id = $1', [buildingId]);
+    if (buildingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Building not found' });
+    }
+    const building = buildingRes.rows[0];
+
+    const roomsRes = await query('SELECT * FROM rooms WHERE building_id = $1 ORDER BY id', [buildingId]);
+    const rooms = roomsRes.rows;
+
+    const dow = dayOfWeekForDateStr(date);
+    const data = await getNextDayTimetableData(buildingId, date, dow, building, rooms);
+    res.json(data);
+  } catch (err) {
+    console.error('Next-timetable error:', err);
+    res.status(500).json({ error: 'Failed to fetch timetable' });
   }
 });
 

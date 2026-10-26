@@ -1,156 +1,103 @@
-import { HiOutlineClock, HiOutlineLocationMarker, HiOutlineUsers, HiOutlineArrowRight } from 'react-icons/hi';
-
-/**
- * Formats a Date or ISO string to a human-readable time like "2:30 PM"
- */
-function formatTime(dateOrStr) {
-  if (!dateOrStr) return '--';
-  const d = new Date(dateOrStr);
-  return d.toLocaleTimeString('en-IN', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  });
-}
-
-/**
- * Formats minutes into a readable duration like "2h 30m"
- */
-function formatDuration(minutes) {
-  if (!minutes || minutes <= 0) return '--';
+function formatDurationHoursMinutes(minutes) {
+  if (minutes == null || isNaN(minutes) || minutes <= 0) return '';
   const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
+  const m = Math.round(minutes % 60);
+  if (h > 0 && m > 0) return `${h} h ${m} m`;
+  if (h > 0) return `${h} h`;
+  return `${m} m`;
 }
 
-export default function RoomCard({ room, onClick, staggerIndex = 0 }) {
+function formatTime12(t) {
+  if (!t) return '';
+  const [h, m] = t.split(':');
+  const hr = parseInt(h, 10);
+  const ampm = hr >= 12 ? 'pm' : 'am';
+  const hr12 = hr % 12 || 12;
+  return `${hr12}:${m} ${ampm}`;
+}
+
+function getUntilAndLeft(room) {
+  if (room.status === 'closed') {
+    return { until: 'Closed for exams', left: 'Closed for exams', isUrgent: false };
+  }
+
+  if (room.is_next_day) {
+    const untilTime = room.first_class?.start_time ? formatTime12(room.first_class.start_time) : '10:00 pm';
+    const until = `until ${untilTime}`;
+    const left = room.first_class
+      ? `First class: ${formatTime12(room.first_class.start_time)}`
+      : `${formatDurationHoursMinutes(room.free_duration)} free`;
+    return { until, left, isUrgent: false };
+  }
+
+  const freeMin = room.free_duration ?? room.free_for_minutes;
+  let until = 'until 10:00 pm';
+  if (room.free_until) {
+    const d = new Date(room.free_until);
+    if (!isNaN(d.getTime())) {
+      until = `until ${d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase()}`;
+    }
+  }
+
+  let left = '';
+  let isUrgent = false;
+  if (freeMin != null && !isNaN(freeMin) && freeMin > 0) {
+    left = `${formatDurationHoursMinutes(freeMin)} left`;
+    isUrgent = freeMin <= 50;
+  }
+
+  return { until, left, isUrgent };
+}
+
+export default function RoomCard({ room, onClick }) {
   const isClosed = room.status === 'closed';
-  const isFree = room.status === 'free' || room.status === 'free_for_window';
-  const maxDuration = 16 * 60; // 16 hours (6 AM to 10 PM)
-  const fillPercent = Math.min(((room.free_duration || 0) / maxDuration) * 100, 100);
-
-  const isDividable = room.name === '2B';
-  const isSplit = room.name === '2B1' || room.name === '2B2' || !!room.parent_room_id;
-
-  const cardStyleClass = isClosed ? 'card-closed' : isFree ? 'card-free' : 'card-busy';
+  const { until, left, isUrgent } = getUntilAndLeft(room);
+  const submeta = room.name === '2B' ? 'or 2B1 and 2B2, 100 seats each' : null;
 
   return (
-    <div
-      className={`card room-card ${cardStyleClass} fade-in stagger-${Math.min(staggerIndex, 6)}`}
+    <article
+      className={`room-card${isUrgent ? ' urgent' : ''}${isClosed ? ' closed' : ''}`}
       onClick={() => onClick?.(room)}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && onClick?.(room)}
       id={`room-card-${room.id}`}
     >
-      <div>
-        {/* Header */}
-        <div className="room-card-header">
-          <div>
-            <div className="room-card-name">
-              Room {room.name}
-              <span className="room-card-floor">{room.floor} Floor</span>
-            </div>
-            {isDividable && (
-              <div style={{ marginTop: 4 }}>
-                <span className="room-card-badge badge-dividable">
-                  Dividable (2B1 + 2B2)
-                </span>
-              </div>
-            )}
-            {isSplit && (
-              <div style={{ marginTop: 4 }}>
-                <span className="room-card-badge badge-split">
-                  Split Room (Part of 2B)
-                </span>
-              </div>
-            )}
+      <div className="room-card-top">
+        <div>
+          <div className="room-code">{room.name}</div>
+          <div className="room-meta">
+            {room.floor} floor · {room.capacity ?? '—'} seats
           </div>
-          <div className="room-card-status">
-            {isClosed ? (
-              <span className="status-badge status-closed">
-                <span className="status-dot status-dot-closed" />
-                {room.closure_badge || `${room.closure_reason || 'Exam'} — Room Closed`}
-              </span>
-            ) : (
-              <span className={`status-badge ${isFree ? 'status-free' : 'status-busy'}`}>
-                <span className={`status-dot ${isFree ? 'status-dot-free' : 'status-dot-busy'}`} />
-                {isFree ? 'Free' : 'Busy'}
-              </span>
-            )}
-          </div>
+          {submeta && <div className="room-submeta">{submeta}</div>}
         </div>
 
-        {/* Info Row */}
-        <div className="room-card-info">
-          {room.capacity && (
-            <span className="room-card-info-item">
-              <HiOutlineUsers size={14} />
-              {room.capacity} seats
-            </span>
-          )}
-          {room.building_name && (
-            <span className="room-card-info-item">
-              <HiOutlineLocationMarker size={14} />
-              {room.building_name}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* Duration & Availability Footer */}
-      <div style={{ marginTop: 14 }}>
         {isClosed ? (
-          <div className="free-until-text" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ color: 'var(--accent-danger)', fontWeight: 600 }}>
-              🚫 Closed for {room.closure_reason || 'Exam'}
-              {room.closed_until ? ` until ${formatTime(room.closed_until)}` : ''}
-            </span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              Details <HiOutlineArrowRight size={12} />
-            </span>
-          </div>
-        ) : isFree && room.free_duration ? (
-          <>
-            <div className="room-card-duration">
-              <HiOutlineClock size={14} style={{ color: 'var(--text-muted)' }} />
-              <div className="duration-bar">
-                <div
-                  className="duration-fill"
-                  style={{ width: `${Math.max(fillPercent, 8)}%` }}
-                />
-              </div>
-              <span className="duration-text">
-                {formatDuration(room.free_duration)}
-              </span>
-            </div>
-            <div className="free-until-text" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>
-                Free until <span className="free-until-time">{formatTime(room.free_until)}</span>
-              </span>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-accent)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                Details <HiOutlineArrowRight size={12} />
-              </span>
-            </div>
-          </>
-        ) : isFree ? (
-          <div className="free-until-text" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span className="free-until-time">Free for selected window</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-accent)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              Details <HiOutlineArrowRight size={12} />
-            </span>
-          </div>
+          <span className="status-badge closed">Closed</span>
+        ) : room.is_next_day ? (
+          <span className="status-badge free">Opens {formatTime12(room.opens_at) || '6:00 am'}</span>
+        ) : isUrgent ? (
+          <span className="status-badge urgent">Ends soon</span>
         ) : (
-          <div className="free-until-text" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ color: 'var(--accent-danger)' }}>Currently occupied</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              Schedule <HiOutlineArrowRight size={12} />
-            </span>
-          </div>
+          <span className="status-badge free">Free</span>
         )}
+
+        <div className="room-card-right-mobile">
+          <div className="mobile-until">{until}</div>
+          <div className="mobile-time-left">{left}</div>
+        </div>
       </div>
-    </div>
+
+      <div className="room-card-footer-pc">
+        <span className="footer-label">{room.is_next_day ? 'Morning status' : 'Free until'}</span>
+        <span className="footer-value">
+          {isClosed
+            ? 'Closed for exams'
+            : room.is_next_day
+            ? `Free until ${room.first_class ? formatTime12(room.first_class.start_time) : '10:00 pm'}${room.first_class ? ` · First class: ${room.first_class.course_name}` : ' · All day free'}`
+            : `${until.replace('until ', '')}${left ? ` · ${left.replace(' left', '')}` : ''}`}
+        </span>
+      </div>
+    </article>
   );
 }

@@ -15,6 +15,11 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  const mockTime = window.__MOCK_TIME__ || localStorage.getItem('freeroom_mock_time');
+  if (mockTime) {
+    config.headers['x-mock-time'] = mockTime;
+    config.params = { ...(config.params || {}), now: mockTime };
+  }
   return config;
 });
 
@@ -59,6 +64,9 @@ export const roomsAPI = {
 
   getMyGroup: (params) =>
     api.get('/rooms/my-group', { params }),
+
+  getNextTimetable: (params) =>
+    api.get('/rooms/next-timetable', { params }),
 };
 
 // ── Reports ─────────────────────────────────────────────

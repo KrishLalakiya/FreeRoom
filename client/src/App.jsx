@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import RoomDetailPage from './pages/RoomDetailPage';
+import RoomsPage from './pages/RoomsPage';
 import AdminPage from './pages/AdminPage';
 import './index.css';
 
@@ -80,7 +81,31 @@ function AppRoutes() {
         path="/"
         element={
           <ProtectedRoute>
-            <DashboardPage />
+            <DashboardPage defaultTab="now" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/find"
+        element={
+          <ProtectedRoute>
+            <DashboardPage defaultTab="window" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/my-group"
+        element={
+          <ProtectedRoute>
+            <DashboardPage defaultTab="group" />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/rooms"
+        element={
+          <ProtectedRoute>
+            <RoomsPage />
           </ProtectedRoute>
         }
       />
@@ -114,11 +139,12 @@ export default function App() {
           toastOptions={{
             duration: 3000,
             style: {
-              background: '#1a2236',
-              color: '#f1f5f9',
-              border: '1px solid rgba(148, 163, 184, 0.1)',
-              borderRadius: '12px',
-              fontSize: '0.9rem',
+              background: 'var(--bg-card)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: '8px',
+              fontSize: '0.875rem',
+              boxShadow: 'var(--shadow-md)',
             },
           }}
         />
