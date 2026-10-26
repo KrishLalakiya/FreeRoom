@@ -62,6 +62,102 @@
   --transition-normal: 200ms ease;
 }
 
+/* =========================================================
+   DARK MODE TOKENS — Deep Obsidian Charcoal & Emerald Glow
+   ========================================================= */
+[data-theme="dark"] {
+  --bg-page: #0d1117;
+  --bg-card: #161b22;
+  --bg-subtle: #21262d;
+  --bg-input: #161b22;
+  --border-subtle: #30363d;
+  --border-control: #38414e;
+  --border-urgent: #e5534b;
+
+  --text-primary: #f0f6fc;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+
+  --accent-black: #f0f6fc;
+  --accent-black-text: #0d1117;
+
+  --green-bg: rgba(34, 197, 94, 0.16);
+  --green-text: #4ade80;
+  --green-border: #22c55e;
+
+  --urgent-bg: #da3633;
+  --urgent-text: #ffffff;
+
+  /* Compatibility aliases */
+  --bg-primary: var(--bg-page);
+  --bg-secondary: var(--bg-subtle);
+  --border-color: var(--border-subtle);
+  --accent-primary: #58a6ff;
+  --accent-primary-light: #79c0ff;
+  --accent-primary-dark: #1f6feb;
+  --accent-success: #3fb950;
+  --accent-success-bg: rgba(46, 160, 67, 0.18);
+  --border-success: #238636;
+  --accent-danger: #f85149;
+  --accent-danger-bg: rgba(248, 81, 73, 0.16);
+  --accent-warning: #e3b341;
+  --accent-warning-bg: rgba(210, 153, 34, 0.16);
+  --accent-info: #58a6ff;
+  --accent-info-bg: rgba(56, 139, 253, 0.16);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 36px rgba(0, 0, 0, 0.65);
+}
+
+/* =========================================================
+   DARKER MODE TOKENS — Ultra Deep Obsidian / Pitch Black
+   ========================================================= */
+[data-theme="darker"] {
+  --bg-page: #05070a;
+  --bg-card: #0c0f15;
+  --bg-subtle: #141922;
+  --bg-input: #0c0f15;
+  --border-subtle: #1c222c;
+  --border-control: #272f3d;
+  --border-urgent: #f85149;
+
+  --text-primary: #f0f6fc;
+  --text-secondary: #8b949e;
+  --text-muted: #57606a;
+
+  --accent-black: #ffffff;
+  --accent-black-text: #05070a;
+
+  --green-bg: rgba(46, 160, 67, 0.2);
+  --green-text: #3fb950;
+  --green-border: #2ea043;
+
+  --urgent-bg: #da3633;
+  --urgent-text: #ffffff;
+
+  /* Compatibility aliases */
+  --bg-primary: var(--bg-page);
+  --bg-secondary: var(--bg-subtle);
+  --border-color: var(--border-subtle);
+  --accent-primary: #58a6ff;
+  --accent-primary-light: #79c0ff;
+  --accent-primary-dark: #1f6feb;
+  --accent-success: #3fb950;
+  --accent-success-bg: rgba(46, 160, 67, 0.2);
+  --border-success: #2ea043;
+  --accent-danger: #f85149;
+  --accent-danger-bg: rgba(248, 81, 73, 0.18);
+  --accent-warning: #e3b341;
+  --accent-warning-bg: rgba(210, 153, 34, 0.18);
+  --accent-info: #58a6ff;
+  --accent-info-bg: rgba(56, 139, 253, 0.18);
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.6);
+  --shadow-md: 0 4px 18px rgba(0, 0, 0, 0.7);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.9);
+}
+
 *, *::before, *::after {
   margin: 0;
   padding: 0;
@@ -194,6 +290,38 @@ button, select, input {
   border-radius: 2px;
 }
 
+.header-right-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.theme-quick-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-control);
+  color: var(--text-primary);
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.theme-quick-btn:hover {
+  background-color: var(--bg-card);
+  border-color: var(--text-primary);
+  box-shadow: 0 0 0 3px rgba(26, 26, 25, 0.08);
+}
+
+[data-theme="dark"] .theme-quick-btn:hover {
+  box-shadow: 0 0 0 3px rgba(240, 246, 252, 0.12);
+}
+
 /* Avatar Button & Account Dropdown */
 .avatar-wrap {
   position: relative;
@@ -231,7 +359,7 @@ button, select, input {
   position: absolute;
   top: calc(100% + 8px);
   right: 0;
-  min-width: 230px;
+  min-width: 275px;
   background: var(--bg-card);
   border: 1px solid var(--border-control);
   border-radius: 12px;
@@ -316,6 +444,91 @@ button, select, input {
 
 .rename-input:focus {
   border-color: var(--text-primary);
+}
+
+/* Profile Theme Preference Section */
+.account-preference-section {
+  padding: 10px 14px 12px;
+  background: var(--bg-subtle);
+  margin: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+}
+
+.account-preference-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.account-preference-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.account-preference-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-control);
+}
+
+.theme-toggle-pills {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.theme-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 4px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.theme-pill-btn:hover:not(.active) {
+  color: var(--text-primary);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+[data-theme="dark"] .theme-pill-btn:hover:not(.active),
+[data-theme="darker"] .theme-pill-btn:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.theme-pill-btn.active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-color: var(--border-control);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="dark"] .theme-pill-btn.active,
+[data-theme="darker"] .theme-pill-btn.active {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.theme-icon {
+  font-size: 13px;
+  line-height: 1;
 }
 
 /* =========================================================
@@ -2466,3 +2679,238 @@ select.input-field {
   gap: 6px;
   margin-top: 8px;
 }
+
+/* =========================================================
+   DARK & DARKER MODE COMPONENT REFINEMENTS
+   ========================================================= */
+[data-theme="dark"] .schedule-type-chip.lecture,
+[data-theme="darker"] .schedule-type-chip.lecture {
+  background: rgba(56, 139, 253, 0.16);
+  color: #79c0ff;
+  border-color: rgba(56, 139, 253, 0.35);
+}
+[data-theme="dark"] .schedule-type-chip.lab,
+[data-theme="darker"] .schedule-type-chip.lab {
+  background: rgba(187, 128, 255, 0.16);
+  color: #d2a8ff;
+  border-color: rgba(187, 128, 255, 0.35);
+}
+[data-theme="dark"] .schedule-type-chip.tutorial,
+[data-theme="darker"] .schedule-type-chip.tutorial {
+  background: rgba(57, 211, 83, 0.16);
+  color: #7ee787;
+  border-color: rgba(57, 211, 83, 0.35);
+}
+[data-theme="dark"] .schedule-type-chip.club,
+[data-theme="darker"] .schedule-type-chip.club {
+  background: rgba(210, 153, 34, 0.16);
+  color: #e3b341;
+  border-color: rgba(210, 153, 34, 0.35);
+}
+[data-theme="dark"] .schedule-type-chip.free,
+[data-theme="darker"] .schedule-type-chip.free {
+  background: rgba(46, 160, 67, 0.18);
+  color: #3fb950;
+  border-color: rgba(46, 160, 67, 0.35);
+}
+[data-theme="dark"] .schedule-type-chip.closed,
+[data-theme="darker"] .schedule-type-chip.closed {
+  background: rgba(248, 81, 73, 0.16);
+  color: #ff7b72;
+  border-color: rgba(248, 81, 73, 0.35);
+}
+
+/* DatePicker in dark & darker modes */
+[data-theme="dark"] .custom-datepicker-popup {
+  background: #161b22;
+  border-color: #30363d;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+[data-theme="darker"] .custom-datepicker-popup {
+  background: #0c0f15;
+  border-color: #272f3d;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 4px 12px rgba(0, 0, 0, 0.6);
+}
+[data-theme="dark"] .datepicker-nav-btn {
+  background: #21262d;
+  border-color: #38414e;
+  color: #f0f6fc;
+}
+[data-theme="darker"] .datepicker-nav-btn {
+  background: #141922;
+  border-color: #272f3d;
+  color: #f0f6fc;
+}
+[data-theme="dark"] .datepicker-nav-btn:hover,
+[data-theme="darker"] .datepicker-nav-btn:hover {
+  background: #30363d;
+  border-color: #58a6ff;
+}
+[data-theme="dark"] .datepicker-quick-select {
+  background: #21262d;
+  border-color: #38414e;
+  color: #f0f6fc;
+}
+[data-theme="darker"] .datepicker-quick-select {
+  background: #141922;
+  border-color: #272f3d;
+  color: #f0f6fc;
+}
+[data-theme="dark"] .datepicker-day-cell:hover {
+  background: #21262d;
+}
+[data-theme="darker"] .datepicker-day-cell:hover {
+  background: #141922;
+}
+[data-theme="dark"] .datepicker-day-cell.dimmed,
+[data-theme="darker"] .datepicker-day-cell.dimmed {
+  color: #484f58;
+  opacity: 0.6;
+}
+[data-theme="dark"] .datepicker-day-cell.selected,
+[data-theme="darker"] .datepicker-day-cell.selected {
+  background: #238636;
+  color: #ffffff;
+}
+[data-theme="dark"] .datepicker-day-cell.today,
+[data-theme="darker"] .datepicker-day-cell.today {
+  border-color: #388bfd;
+}
+
+/* Visual Day Bar */
+[data-theme="dark"] .visual-day-bar {
+  background: #21262d;
+  border-color: #30363d;
+}
+[data-theme="darker"] .visual-day-bar {
+  background: #141922;
+  border-color: #272f3d;
+}
+[data-theme="dark"] .timeline-segment.lecture,
+[data-theme="darker"] .timeline-segment.lecture { background: #1f6feb; }
+[data-theme="dark"] .timeline-segment.lab,
+[data-theme="darker"] .timeline-segment.lab { background: #8957e5; }
+[data-theme="dark"] .timeline-segment.tutorial,
+[data-theme="darker"] .timeline-segment.tutorial { background: #238636; }
+[data-theme="dark"] .timeline-segment.club,
+[data-theme="darker"] .timeline-segment.club { background: #9e6a03; }
+[data-theme="dark"] .timeline-segment.free,
+[data-theme="darker"] .timeline-segment.free { background: #2ea043; }
+[data-theme="dark"] .timeline-segment.closed,
+[data-theme="darker"] .timeline-segment.closed { background: #da3633; }
+
+/* Filter buttons and selects */
+[data-theme="dark"] .filter-btn:hover:not(.active),
+[data-theme="darker"] .filter-btn:hover:not(.active) {
+  border-color: #484f58;
+  color: #f0f6fc;
+}
+[data-theme="dark"] .filter-btn.active {
+  background: #f0f6fc;
+  color: #0d1117;
+  border-color: #f0f6fc;
+}
+[data-theme="darker"] .filter-btn.active {
+  background: #f0f6fc;
+  color: #05070a;
+  border-color: #f0f6fc;
+}
+[data-theme="dark"] .dropdown-select {
+  background-color: #161b22;
+  border-color: #38414e;
+  color: #f0f6fc;
+}
+[data-theme="darker"] .dropdown-select {
+  background-color: #0c0f15;
+  border-color: #272f3d;
+  color: #f0f6fc;
+}
+[data-theme="dark"] .dropdown-select:hover,
+[data-theme="dark"] .dropdown-select:focus,
+[data-theme="darker"] .dropdown-select:hover,
+[data-theme="darker"] .dropdown-select:focus {
+  border-color: #58a6ff;
+}
+
+/* Card hover and borders */
+[data-theme="dark"] .room-card:hover {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  border-color: #388bfd;
+}
+[data-theme="darker"] .room-card:hover {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.7);
+  border-color: #388bfd;
+}
+[data-theme="dark"] .room-tag {
+  background: #21262d;
+  border-color: #30363d;
+  color: #8b949e;
+}
+[data-theme="darker"] .room-tag {
+  background: #141922;
+  border-color: #272f3d;
+  color: #8b949e;
+}
+[data-theme="dark"] .spec-item,
+[data-theme="dark"] .crowd-box {
+  background: #21262d;
+  border-color: #30363d;
+}
+[data-theme="darker"] .spec-item,
+[data-theme="darker"] .crowd-box {
+  background: #141922;
+  border-color: #272f3d;
+}
+
+/* Navigation headers and bars */
+[data-theme="dark"] .app-header {
+  background-color: #0d1117;
+  border-bottom-color: #21262d;
+}
+[data-theme="darker"] .app-header {
+  background-color: #05070a;
+  border-bottom-color: #1c222c;
+}
+[data-theme="dark"] .mobile-bottom-nav {
+  background-color: #161b22;
+  border-top-color: #21262d;
+}
+[data-theme="darker"] .mobile-bottom-nav {
+  background-color: #0c0f15;
+  border-top-color: #1c222c;
+}
+[data-theme="dark"] .bottom-nav-item.active,
+[data-theme="darker"] .bottom-nav-item.active {
+  color: #58a6ff;
+}
+[data-theme="dark"] .pc-nav-item.active::after,
+[data-theme="darker"] .pc-nav-item.active::after {
+  background-color: #58a6ff;
+}
+[data-theme="dark"] .mobile-sheet {
+  background: #161b22;
+  border-top-color: #30363d;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.5);
+}
+[data-theme="darker"] .mobile-sheet {
+  background: #0c0f15;
+  border-top-color: #272f3d;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.8);
+}
+[data-theme="dark"] .sheet-handle {
+  background: #38414e;
+}
+[data-theme="darker"] .sheet-handle {
+  background: #272f3d;
+}
+
+/* Form inputs & tables */
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea,
+[data-theme="darker"] input,
+[data-theme="darker"] select,
+[data-theme="darker"] textarea {
+  color-scheme: dark;
+}
+

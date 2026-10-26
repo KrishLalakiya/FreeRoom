@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 
 /* ── Inline SVG Icons matching the FreeRoom UI design ─────────────────────── */
 function IconClock() {
@@ -54,6 +55,7 @@ function IconCog() {
 
 export default function Navbar() {
   const { user, logout, isAdmin } = useAuth();
+  const { theme, setTheme, toggleTheme, isDark } = useTheme();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
@@ -120,72 +122,121 @@ export default function Navbar() {
           </nav>
         </div>
 
-        <div className="avatar-wrap" ref={menuRef}>
+        <div className="header-right-actions">
           <button
-            className="avatar-btn"
-            title={`Profile ${initials}`}
-            aria-label="Account menu"
-            onClick={() => {
-              if (window.innerWidth <= 768) {
-                setMobileSheetOpen(true);
-              } else {
-                setMenuOpen((v) => !v);
-              }
-              setRenaming(false);
-            }}
+            type="button"
+            className="theme-quick-btn"
+            onClick={toggleTheme}
+            title={`Current theme: ${theme === 'darker' ? 'Darker' : (theme === 'dark' ? 'Dark' : 'Current')}`}
+            aria-label="Toggle theme"
           >
-            {user.avatar_url ? (
-              <img src={user.avatar_url} alt={user.name} className="avatar-img" />
-            ) : (
-              initials
-            )}
+            {theme === 'darker' ? '🌑' : (theme === 'dark' ? '🌙' : '☀️')}
           </button>
 
-          {/* PC Account Dropdown Menu */}
-          {menuOpen && (
-            <div className="account-dropdown">
-              <div className="account-info">
-                <div className="account-name">{user.name || 'Student'}</div>
-                <div className="account-email">{user.email}</div>
-              </div>
-              <div className="account-divider" />
-              {renaming ? (
-                <div className="rename-box">
-                  <input
-                    className="rename-input"
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="Display name"
-                    autoFocus
-                    onKeyDown={(e) => e.key === 'Enter' && handleRename()}
-                  />
-                  <button className="account-menu-item" style={{ fontWeight: 600 }} onClick={handleRename}>
-                    Save
-                  </button>
-                  <button className="account-menu-item" onClick={() => setRenaming(false)}>
-                    Cancel
-                  </button>
-                </div>
+          <div className="avatar-wrap" ref={menuRef}>
+            <button
+              className="avatar-btn"
+              title={`Profile ${initials}`}
+              aria-label="Account menu"
+              onClick={() => {
+                if (window.innerWidth <= 768) {
+                  setMobileSheetOpen(true);
+                } else {
+                  setMenuOpen((v) => !v);
+                }
+                setRenaming(false);
+              }}
+            >
+              {user.avatar_url ? (
+                <img src={user.avatar_url} alt={user.name} className="avatar-img" />
               ) : (
-                <button
-                  className="account-menu-item"
-                  onClick={() => { setNewName(user.name || ''); setRenaming(true); }}
-                >
-                  ✏️ Rename
-                </button>
+                initials
               )}
-              <button className="account-menu-item" disabled style={{ opacity: 0.45 }}>
-                Preferences (coming soon)
-              </button>
-              <div className="account-divider" />
-              <button
-                className="account-menu-item account-menu-item-danger"
-                onClick={logout}
-              >
-                Sign out
-              </button>
-            </div>
-          )}
+            </button>
+
+            {/* PC Account Dropdown Menu */}
+            {menuOpen && (
+              <div className="account-dropdown">
+                <div className="account-info">
+                  <div className="account-name">{user.name || 'Student'}</div>
+                  <div className="account-email">{user.email}</div>
+                </div>
+                <div className="account-divider" />
+                {renaming ? (
+                  <div className="rename-box">
+                    <input
+                      className="rename-input"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      placeholder="Display name"
+                      autoFocus
+                      onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+                    />
+                    <button className="account-menu-item" style={{ fontWeight: 600 }} onClick={handleRename}>
+                      Save
+                    </button>
+                    <button className="account-menu-item" onClick={() => setRenaming(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    className="account-menu-item"
+                    onClick={() => { setNewName(user.name || ''); setRenaming(true); }}
+                  >
+                    ✏️ Rename
+                  </button>
+                )}
+
+                {/* Profile Preference: Current vs Dark vs Darker */}
+                <div className="account-preference-section">
+                  <div className="account-preference-header">
+                    <span className="account-preference-title">Theme preference</span>
+                    <span className="account-preference-badge">
+                      {theme === 'darker' ? 'Darker' : (theme === 'dark' ? 'Dark' : 'Current')}
+                    </span>
+                  </div>
+                  <div className="theme-toggle-pills" role="radiogroup" aria-label="Theme preference">
+                    <button
+                      type="button"
+                      className={`theme-pill-btn${theme === 'light' ? ' active' : ''}`}
+                      onClick={() => setTheme('light')}
+                      role="radio"
+                      aria-checked={theme === 'light'}
+                    >
+                      <span className="theme-icon">☀️</span> Current
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-pill-btn${theme === 'dark' ? ' active' : ''}`}
+                      onClick={() => setTheme('dark')}
+                      role="radio"
+                      aria-checked={theme === 'dark'}
+                    >
+                      <span className="theme-icon">🌙</span> Dark
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-pill-btn${theme === 'darker' ? ' active' : ''}`}
+                      onClick={() => setTheme('darker')}
+                      role="radio"
+                      aria-checked={theme === 'darker'}
+                    >
+                      <span className="theme-icon">🌑</span> Darker
+                    </button>
+                  </div>
+                </div>
+
+                <div className="account-divider" />
+                <button
+                  className="account-menu-item account-menu-item-danger"
+                  onClick={logout}
+                >
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -227,9 +278,46 @@ export default function Navbar() {
                 ✏️ Rename
               </button>
             )}
-            <button className="account-menu-item" disabled style={{ opacity: 0.45 }}>
-              Preferences (coming soon)
-            </button>
+
+            {/* Profile Preference: Current vs Dark vs Darker */}
+            <div className="account-preference-section">
+              <div className="account-preference-header">
+                <span className="account-preference-title">Theme preference</span>
+                <span className="account-preference-badge">
+                  {theme === 'darker' ? 'Darker' : (theme === 'dark' ? 'Dark' : 'Current')}
+                </span>
+              </div>
+              <div className="theme-toggle-pills" role="radiogroup" aria-label="Theme preference">
+                <button
+                  type="button"
+                  className={`theme-pill-btn${theme === 'light' ? ' active' : ''}`}
+                  onClick={() => setTheme('light')}
+                  role="radio"
+                  aria-checked={theme === 'light'}
+                >
+                  <span className="theme-icon">☀️</span> Current
+                </button>
+                <button
+                  type="button"
+                  className={`theme-pill-btn${theme === 'dark' ? ' active' : ''}`}
+                  onClick={() => setTheme('dark')}
+                  role="radio"
+                  aria-checked={theme === 'dark'}
+                >
+                  <span className="theme-icon">🌙</span> Dark
+                </button>
+                <button
+                  type="button"
+                  className={`theme-pill-btn${theme === 'darker' ? ' active' : ''}`}
+                  onClick={() => setTheme('darker')}
+                  role="radio"
+                  aria-checked={theme === 'darker'}
+                >
+                  <span className="theme-icon">🌑</span> Darker
+                </button>
+              </div>
+            </div>
+
             <div className="account-divider" />
             <button
               className="account-menu-item account-menu-item-danger"
