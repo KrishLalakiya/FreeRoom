@@ -8,9 +8,14 @@ dotenv.config();
  * Safe to run multiple times (IF NOT EXISTS).
  */
 async function migrate() {
-  const client = await getClient();
+  if (!process.env.DATABASE_URL) {
+    console.warn('⚠️ DATABASE_URL environment variable is not set. Skipping migration.');
+    return;
+  }
 
+  let client;
   try {
+    client = await getClient();
     await client.query('BEGIN');
 
     // ── Users ──────────────────────────────────────────────
@@ -340,11 +345,19 @@ async function migrate() {
     await client.query('COMMIT');
     console.log('✅ Migration completed successfully');
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ Migration failed:', err);
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rbErr) {
+        // Ignore rollback error
+      }
+    }
+    console.error('❌ Migration failed:', err.message || err);
     throw err;
   } finally {
-    client.release();
+    if (client) {
+      client.release();
+    }
   }
 }
 
@@ -353,7 +366,10 @@ const isMainModule = process.argv[1]?.includes('migrate');
 if (isMainModule) {
   migrate()
     .then(() => process.exit(0))
-    .catch(() => process.exit(1));
+    .catch((err) => {
+      console.error('Migration execution failed:', err.message || err);
+      process.exit(1);
+    });
 }
 
 export default migrate;

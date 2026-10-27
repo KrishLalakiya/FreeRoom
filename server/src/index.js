@@ -7,6 +7,7 @@ import authRoutes from './routes/auth.js';
 import roomRoutes from './routes/rooms.js';
 import reportRoutes from './routes/reports.js';
 import adminRoutes from './routes/admin.js';
+import migrate from './config/migrate.js';
 
 dotenv.config();
 
@@ -75,21 +76,33 @@ app.get('/api/health', (req, res) => {
 });
 
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const clientDistPath = path.resolve(__dirname, '../../client/dist');
+const clientIndexPath = path.join(clientDistPath, 'index.html');
 
-// Serve client static assets
-app.use(express.static(clientDistPath));
+// Serve client static assets if dist folder exists
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+}
 
-// SPA fallback for non-API routes
-app.get('*', (req, res, next) => {
+// Fallback for non-API routes
+app.get('*', (req, res) => {
   if (req.originalUrl.startsWith('/api')) {
     return res.status(404).json({ error: 'Not found', path: req.originalUrl });
   }
-  res.sendFile(path.join(clientDistPath, 'index.html'));
+  if (fs.existsSync(clientIndexPath)) {
+    return res.sendFile(clientIndexPath);
+  }
+  res.json({
+    name: 'FreeRoom API',
+    status: 'online',
+    health: '/api/health',
+    client: process.env.CLIENT_URL || 'https://freeroom-app.vercel.app',
+  });
 });
 
 // Global error handler
@@ -103,15 +116,28 @@ app.use((err, req, res, next) => {
 
 // ── Start server ──────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`
+async function startServer() {
+  if (process.env.DATABASE_URL) {
+    try {
+      console.log('🔄 Checking database schema & migrations...');
+      await migrate();
+    } catch (err) {
+      console.error('⚠️ Database migration error on startup:', err.message || err);
+    }
+  }
+
+  app.listen(PORT, () => {
+    console.log(`
   🏫 FreeRoom API running
   ────────────────────────
   Port:     ${PORT}
   Env:      ${process.env.NODE_ENV || 'development'}
   Client:   ${process.env.CLIENT_URL || 'http://localhost:5173'}
   ────────────────────────
-  `);
-});
+    `);
+  });
+}
+
+startServer();
 
 export default app;
