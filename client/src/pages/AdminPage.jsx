@@ -115,15 +115,12 @@ function AdminNavbar() {
               <div className="account-divider" />
               <button
                 type="button"
-                className="account-menu-item"
+                className="account-menu-item account-menu-item-danger"
                 onClick={logout}
                 style={{
-                  color: 'var(--urgent-text, #ef4444)',
                   fontWeight: 600,
                   cursor: 'pointer',
                   width: '100%',
-                  border: 'none',
-                  background: 'none',
                 }}
               >
                 Sign out

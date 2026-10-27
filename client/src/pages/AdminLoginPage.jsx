@@ -103,7 +103,7 @@ export default function AdminLoginPage() {
             style={{
               background: 'var(--urgent-surface-subtle, rgba(239, 68, 68, 0.1))',
               border: '1px solid var(--urgent-border-subtle, #fca5a5)',
-              color: 'var(--urgent-text, #b91c1c)',
+              color: 'var(--urgent-bg, #b91c1c)',
               padding: '12px 14px',
               borderRadius: '8px',
               fontSize: '13.5px',
