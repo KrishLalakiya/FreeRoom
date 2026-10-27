@@ -30,19 +30,45 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       localStorage.removeItem('freeroom_token');
       localStorage.removeItem('freeroom_user');
-      window.location.href = '/login';
+      // Only redirect if attempting to access protected admin page
+      if (window.location.pathname.startsWith('/admin') && window.location.pathname !== '/admin/login') {
+        window.location.href = '/admin/login';
+      }
     }
     return Promise.reject(error);
   }
 );
 
+export const getDeviceSettings = () => {
+  const batchStr = localStorage.getItem('freeroom_student_batch');
+  return {
+    batch: batchStr ? parseInt(batchStr, 10) : undefined,
+    group: localStorage.getItem('freeroom_student_group') || undefined,
+    lastDateWindow: {
+      fromTime: localStorage.getItem('fr_from_time') || undefined,
+      toTime: localStorage.getItem('fr_to_time') || undefined,
+    },
+  };
+};
+
 // ── Auth ────────────────────────────────────────────────
 export const authAPI = {
-  googleLogin: (credential) =>
-    api.post('/auth/google', { credential }),
+  googleLogin: (param, deviceSettings = getDeviceSettings()) => {
+    const payload = typeof param === 'string' ? { credential: param } : param;
+    return api.post('/auth/google', { ...payload, deviceSettings });
+  },
 
-  devLogin: (email, name) =>
-    api.post('/auth/dev-login', { email, name }),
+  devLogin: (email, name, role, deviceSettings = getDeviceSettings()) =>
+    api.post('/auth/dev-login', { email, name, role, deviceSettings }),
+
+  adminLogin: (email, password) =>
+    api.post('/auth/admin-login', { email, password }),
+
+  updateSettings: (settings) =>
+    api.put('/auth/settings', { settings }),
+
+  getMe: () =>
+    api.get('/auth/me'),
 };
 
 // ── Rooms ───────────────────────────────────────────────
@@ -129,6 +155,9 @@ export const adminAPI = {
 
   deleteNoClassDay: (id) =>
     api.delete(`/admin/no-class-days/${id}`),
+
+  getActionLogs: () =>
+    api.get('/admin/action-logs'),
 };
 
 export default api;

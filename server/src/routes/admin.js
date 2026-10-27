@@ -13,6 +13,71 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
+// Ensure admin_actions table exists
+async function ensureAdminActionsTable() {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS admin_actions (
+        id          SERIAL PRIMARY KEY,
+        admin_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        admin_name  VARCHAR(255) NOT NULL,
+        action_type VARCHAR(100) NOT NULL,
+        description TEXT NOT NULL,
+        details     JSONB,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    await query(`
+      CREATE INDEX IF NOT EXISTS idx_admin_actions_created_at
+      ON admin_actions (created_at DESC);
+    `);
+  } catch (err) {
+    console.error('Failed to ensure admin_actions table:', err);
+  }
+}
+ensureAdminActionsTable();
+
+export async function logAdminAction(req, actionType, description, details = null) {
+  try {
+    const adminId = req.user?.id || null;
+    let adminName = req.user?.name || req.user?.email || 'Admin';
+    if (!req.user?.name && req.user?.id) {
+      const uRes = await query('SELECT name, email FROM users WHERE id = $1', [req.user.id]);
+      if (uRes.rows[0]) {
+        adminName = uRes.rows[0].name || uRes.rows[0].email || 'Admin';
+      }
+    }
+    await query(`
+      INSERT INTO admin_actions (admin_id, admin_name, action_type, description, details)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [adminId, adminName, actionType, description, details ? JSON.stringify(details) : null]);
+  } catch (err) {
+    console.error('Failed to log admin action:', err);
+  }
+}
+
+// PRD v6 Section 5 & PRD v5 Section 8: Strictly check admin role for every admin route
+router.use(authenticate, requireAdmin);
+
+/**
+ * GET /api/admin/action-logs
+ * List recent admin actions (PRD v5).
+ */
+router.get('/action-logs', authenticate, requireAdmin, async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT id, admin_id, admin_name, action_type, description, details, created_at
+      FROM admin_actions
+      ORDER BY created_at DESC
+      LIMIT 100
+    `);
+    res.json({ actions: result.rows });
+  } catch (err) {
+    console.error('Fetch action logs error:', err);
+    res.status(500).json({ error: 'Failed to fetch action logs' });
+  }
+});
+
 /**
  * POST /api/admin/events
  * Create a one-off event for a room.
@@ -61,6 +126,7 @@ router.post('/events', authenticate, requireAdmin, async (req, res) => {
     `, [roomId, title, start, end, req.user.id]);
 
     clearAvailabilityCache({ roomId });
+    await logAdminAction(req, 'create_event', `Created one-off event "${title}" in Room #${roomId}`, { roomId, title, startAt, endAt });
 
     res.status(201).json({ event: result.rows[0] });
   } catch (err) {
@@ -84,6 +150,7 @@ router.delete('/events/:id', authenticate, requireAdmin, async (req, res) => {
     }
 
     clearAvailabilityCache({ roomId: result.rows[0].room_id });
+    await logAdminAction(req, 'delete_event', `Deleted one-off event "${result.rows[0].title}"`, { eventId });
 
     res.json({ message: 'Event deleted', event: result.rows[0] });
   } catch (err) {
@@ -132,6 +199,7 @@ router.post('/cancel-class', authenticate, requireAdmin, async (req, res) => {
     }
 
     clearAvailabilityCache();
+    await logAdminAction(req, 'cancel_class', `Cancelled class occurrence for ${date}: ${reason || 'No reason specified'}`, { timetableEntryId, date, reason });
 
     res.status(201).json({
       message: 'Class cancelled for this date',
@@ -241,6 +309,7 @@ router.post('/terms', authenticate, requireAdmin, async (req, res) => {
     `, [batchId, semNum, tNum, startDate, endDate]);
 
     clearAvailabilityCache();
+    await logAdminAction(req, 'create_term', `Added Term ${tNum} (Batch ${bYear}) from ${startDate} to ${endDate}`, req.body);
 
     res.status(201).json({
       term: {
@@ -328,6 +397,7 @@ router.put('/terms/:id', authenticate, requireAdmin, async (req, res) => {
     `, [semNum, tNum, sDate, eDate, termId]);
 
     clearAvailabilityCache();
+    await logAdminAction(req, 'update_term', `Updated Term #${termId} (Term ${tNum}) dates to ${sDate} – ${eDate}`, req.body);
 
     res.json({ term: result.rows[0] });
   } catch (err) {
@@ -350,6 +420,7 @@ router.delete('/terms/:id', authenticate, requireAdmin, async (req, res) => {
     }
 
     clearAvailabilityCache();
+    await logAdminAction(req, 'delete_term', `Deleted Term #${termId}`, { termId });
 
     res.json({ message: 'Term deleted', term: result.rows[0] });
   } catch (err) {
@@ -532,6 +603,7 @@ router.post('/timetable/import', authenticate, requireAdmin, upload.single('file
 
     if (report.committed) {
       clearAvailabilityCache();
+      await logAdminAction(req, 'import_timetable', `Imported timetable file "${req.file.originalname}"`, { filename: req.file.originalname });
     }
 
     return res.status(report.committed ? 200 : 400).json(report);
@@ -598,6 +670,8 @@ router.post('/room-aliases', authenticate, requireAdmin, async (req, res) => {
       RETURNING *
     `, [alias.trim(), parsedRoomId]);
 
+    await logAdminAction(req, 'create_alias', `Mapped timetable alias "${alias.trim()}" to Room #${parsedRoomId}`, { alias: alias.trim(), roomId: parsedRoomId });
+
     res.status(201).json({ alias: result.rows[0] });
   } catch (err) {
     console.error('Alias create error:', err);
@@ -616,6 +690,8 @@ router.delete('/room-aliases/:id', authenticate, requireAdmin, async (req, res) 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Alias not found' });
     }
+
+    await logAdminAction(req, 'delete_alias', `Deleted room alias #${aliasId}`, { aliasId });
 
     res.json({ message: 'Alias deleted', alias: result.rows[0] });
   } catch (err) {
@@ -853,6 +929,7 @@ router.post('/closures', authenticate, requireAdmin, async (req, res) => {
     );
 
     clearAvailabilityCache({ roomId: parsedRoomId, buildingId: resolvedBuildingId });
+    await logAdminAction(req, 'create_closure', `Created ${scope} closure: ${reason.trim() || 'Exam'} (${startDate} to ${finalEndDate})`, req.body);
 
     res.status(201).json({
       closure: insertRes.rows[0],
@@ -878,6 +955,7 @@ router.delete('/closures/:id', authenticate, requireAdmin, async (req, res) => {
     }
 
     clearAvailabilityCache();
+    await logAdminAction(req, 'delete_closure', `Deleted closure #${closureId}`, { closureId });
 
     res.json({ message: 'Closure deleted', closure: result.rows[0] });
   } catch (err) {
@@ -922,6 +1000,7 @@ router.post('/no-class-days', authenticate, requireAdmin, async (req, res) => {
       RETURNING *
     `, [buildingId, date, reason.trim() || 'Holiday', req.user.id]);
     clearAvailabilityCache({ buildingId });
+    await logAdminAction(req, 'create_no_class_day', `Added holiday/break: ${reason.trim() || 'Holiday'} on ${date}`, { date, reason: reason.trim() });
     res.status(201).json({ noClassDay: result.rows[0] });
   } catch (err) {
     console.error('Create no-class-day error:', err);
@@ -940,6 +1019,7 @@ router.delete('/no-class-days/:id', authenticate, requireAdmin, async (req, res)
       return res.status(404).json({ error: 'No-class day not found' });
     }
     clearAvailabilityCache();
+    await logAdminAction(req, 'delete_no_class_day', `Deleted holiday/break #${id}`, { id });
     res.json({ message: 'No-class day deleted', noClassDay: result.rows[0] });
   } catch (err) {
     console.error('Delete no-class-day error:', err);

@@ -22,7 +22,7 @@ router.post('/', authenticate, async (req, res) => {
         error: 'Missing fields',
         message: 'roomId and reportedStatus are required.',
       });
-    }
+    }s
 
     if (!['not_empty', 'actually_free'].includes(reportedStatus)) {
       return res.status(400).json({

@@ -40,6 +40,27 @@ export function authenticate(req, res, next) {
 }
 
 /**
+ * Optional authentication: attaches req.user if a valid token is present,
+ * but allows guest access (req.user = null) without erroring out.
+ */
+export function optionalAuthenticate(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    req.user = null;
+    return next();
+  }
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+  } catch {
+    req.user = null;
+  }
+  next();
+}
+
+/**
  * Require admin role. Must be used after authenticate.
  */
 export function requireAdmin(req, res, next) {
@@ -65,6 +86,6 @@ export function generateToken(user) {
       avatar_url: user.avatar_url,
     },
     JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || '24h' }
+    { expiresIn: process.env.JWT_EXPIRES_IN || '15d' }
   );
 }

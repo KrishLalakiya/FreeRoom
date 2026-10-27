@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { query } from '../config/db.js';
 import { getFreeRoomsNow, getFreeRoomsForWindow, getRoomTimeline, getNextDayTimetableData } from '../services/availabilityEngine.js';
-import { authenticate } from '../middleware/auth.js';
+import { optionalAuthenticate } from '../middleware/auth.js';
 import { toDateStr, isValidDateStr, dayOfWeekForDateStr } from '../utils/timezone.js';
 
 const router = Router();
@@ -11,7 +11,7 @@ const router = Router();
  * Get rooms that are free right now.
  * Query params: buildingId, minDuration (minutes), floor
  */
-router.get('/free-now', authenticate, async (req, res) => {
+router.get('/free-now', optionalAuthenticate, async (req, res) => {
   try {
     const buildingId = parseInt(req.query.buildingId || '1', 10);
     const minDuration = parseInt(req.query.minDuration || '60', 10);
@@ -59,7 +59,7 @@ router.get('/free-now', authenticate, async (req, res) => {
  * GET /api/rooms/next-timetable
  * Get full timetable and morning room availability for a specific day.
  */
-router.get('/next-timetable', authenticate, async (req, res) => {
+router.get('/next-timetable', optionalAuthenticate, async (req, res) => {
   try {
     const buildingId = parseInt(req.query.buildingId || '1', 10);
     let date = req.query.date;
@@ -90,7 +90,7 @@ router.get('/next-timetable', authenticate, async (req, res) => {
  * Get rooms free for a specific future window.
  * Query params: buildingId, date, startTime, endTime, floor, capacity
  */
-router.get('/free-window', authenticate, async (req, res) => {
+router.get('/free-window', optionalAuthenticate, async (req, res) => {
   try {
     const { date, startTime, endTime } = req.query;
     const buildingId = parseInt(req.query.buildingId || '1', 10);
@@ -172,7 +172,7 @@ router.get('/free-window', authenticate, async (req, res) => {
  * Get a room's full-day timeline.
  * Query params: date (defaults to today)
  */
-router.get('/:id/timeline', authenticate, async (req, res) => {
+router.get('/:id/timeline', optionalAuthenticate, async (req, res) => {
   try {
     let roomId = parseInt(req.params.id, 10);
     const date = req.query.date || toDateStr();
@@ -216,7 +216,7 @@ router.get('/:id/timeline', authenticate, async (req, res) => {
  * GET /api/rooms
  * List all rooms in a building.
  */
-router.get('/', authenticate, async (req, res) => {
+router.get('/', optionalAuthenticate, async (req, res) => {
   try {
     const buildingId = parseInt(req.query.buildingId || '1', 10);
 
@@ -239,7 +239,7 @@ router.get('/', authenticate, async (req, res) => {
  * GET /api/rooms/buildings
  * List all buildings.
  */
-router.get('/buildings', authenticate, async (req, res) => {
+router.get('/buildings', optionalAuthenticate, async (req, res) => {
   try {
     const result = await query('SELECT * FROM buildings ORDER BY name');
     res.json({ buildings: result.rows });
@@ -253,7 +253,7 @@ router.get('/buildings', authenticate, async (req, res) => {
  * GET /api/rooms/batches-and-groups
  * List batches and their available groups for student selection (C20).
  */
-router.get('/batches-and-groups', authenticate, async (req, res) => {
+router.get('/batches-and-groups', optionalAuthenticate, async (req, res) => {
   try {
     const batchesRes = await query('SELECT id, year FROM batches ORDER BY year DESC');
     const groupsRes = await query('SELECT id, batch_id, name FROM groups ORDER BY name ASC');
@@ -275,7 +275,7 @@ router.get('/batches-and-groups', authenticate, async (req, res) => {
  * My group view: a student picks batch and group, sees that group's classes and gaps,
  * and which rooms are free during the gaps (C20).
  */
-router.get('/my-group', authenticate, async (req, res) => {
+router.get('/my-group', optionalAuthenticate, async (req, res) => {
   try {
     const batchYear = parseInt(req.query.batchYear || '2029', 10);
     const groupName = (req.query.group || 'Group A').trim();

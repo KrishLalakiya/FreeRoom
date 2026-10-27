@@ -1,46 +1,60 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { authAPI } from '../services/api';
+import { useGoogleLogin } from '@react-oauth/google';
 import { HiOutlineMail } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 
 export default function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [devEmail, setDevEmail] = useState('');
-  const [devName, setDevName] = useState('');
+  const [searchParams] = useSearchParams();
+  const returnTo = searchParams.get('returnTo') || '/';
+
+  const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleDevLogin = async (e) => {
+  const googleLogin = useGoogleLogin({
+    onSuccess: async (tokenResponse) => {
+      setLoading(true);
+      try {
+        const res = await authAPI.googleLogin({ accessToken: tokenResponse.access_token });
+        login(res.data.token, res.data.user);
+        toast.success(`Welcome, ${res.data.user.name}!`);
+        navigate(returnTo);
+      } catch (err) {
+        toast.error(err.response?.data?.message || err.message || 'Google sign-in failed');
+      } finally {
+        setLoading(false);
+      }
+    },
+    onError: (error) => {
+      console.error('Google sign-in error:', error);
+      toast.error('Google sign-in was cancelled or failed');
+    },
+  });
+
+  const handleEmailLogin = async (e) => {
     e.preventDefault();
-    if (!devEmail.trim()) {
+    if (!email.trim()) {
       toast.error('Please enter an email');
       return;
     }
 
     setLoading(true);
     try {
-      const res = await authAPI.devLogin(devEmail.trim(), devName.trim() || undefined);
+      const res = await authAPI.devLogin(email.trim(), name.trim() || undefined);
       login(res.data.token, res.data.user);
       toast.success(`Welcome, ${res.data.user.name}!`);
-      navigate('/');
+      if (res.data.user.role === 'admin') {
+        navigate('/admin');
+      } else {
+        navigate(returnTo);
+      }
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Login failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleAdminLogin = async () => {
-    setLoading(true);
-    try {
-      const res = await authAPI.devLogin('admin@freeroom.dev', 'Dev Admin');
-      login(res.data.token, res.data.user);
-      toast.success('Signed in as Admin');
-      navigate('/');
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Login failed');
+      toast.error(err.response?.data?.message || err.message || 'Login failed');
     } finally {
       setLoading(false);
     }
@@ -56,7 +70,14 @@ export default function LoginPage() {
           See which classrooms are empty right now and how long they stay free.
         </p>
 
-        <button className="google-btn" disabled title="Configure GOOGLE_CLIENT_ID in .env">
+        <button
+          type="button"
+          className="google-btn"
+          onClick={() => googleLogin()}
+          disabled={loading}
+          title="Sign in with your Google account"
+          id="btn-google-login"
+        >
           <svg width="18" height="18" viewBox="0 0 48 48">
             <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
             <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
@@ -67,37 +88,37 @@ export default function LoginPage() {
         </button>
 
         <div className="dev-login-divider">
-          <span>dev mode</span>
+          <span>or continue with email</span>
         </div>
 
-        <form onSubmit={handleDevLogin} style={{ textAlign: 'left' }}>
+        <form onSubmit={handleEmailLogin} style={{ textAlign: 'left' }}>
           <div className="input-group">
-            <label className="form-label" htmlFor="dev-login-email">Email</label>
+            <label className="form-label" htmlFor="login-email">Email</label>
             <input
               type="email"
               className="input-field"
               placeholder="you@sst.scaler.com"
-              value={devEmail}
-              onChange={(e) => setDevEmail(e.target.value)}
-              id="dev-login-email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              id="login-email"
             />
           </div>
           <div className="input-group">
-            <label className="form-label" htmlFor="dev-login-name">Name (optional)</label>
+            <label className="form-label" htmlFor="login-name">Name (optional)</label>
             <input
               type="text"
               className="input-field"
               placeholder="Your name"
-              value={devName}
-              onChange={(e) => setDevName(e.target.value)}
-              id="dev-login-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              id="login-name"
             />
           </div>
           <button
             type="submit"
             className="btn btn-primary btn-full btn-lg"
             disabled={loading}
-            id="dev-login-submit"
+            id="login-submit"
           >
             <HiOutlineMail size={17} />
             {loading ? 'Signing in...' : 'Continue'}
@@ -105,13 +126,13 @@ export default function LoginPage() {
         </form>
 
         <button
-          className="btn btn-secondary btn-full"
+          type="button"
+          className="btn btn-outline btn-full btn-lg"
           style={{ marginTop: '10px' }}
-          onClick={handleAdminLogin}
-          disabled={loading}
-          id="admin-login-btn"
+          onClick={() => navigate(returnTo)}
+          id="btn-continue-guest"
         >
-          Sign in as Admin
+          Continue without account
         </button>
       </div>
     </div>

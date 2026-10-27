@@ -1,210 +1,107 @@
-# FreeRoom (Version 2)
+# FreeRoom
 
-FreeRoom is a web application designed for campus college students to discover which classrooms in a campus building are empty, right now or for a planned future study window, and exactly how long they will remain free.
+FreeRoom shows students which classrooms in their college building are empty right now, which are free later today or tomorrow, and for how long. It also shows each student's own class timetable with the free rooms during their gaps.
 
----
+## Problem Statement
 
-## 1. Features in Version 2
+Students waste time walking between classrooms to find an empty room to study or hold a group discussion. The library has limited seats, and the timetable for each batch and group is kept in a spreadsheet that students cannot easily check. There is no single place to see which rooms are free, when they become busy again, and which rooms are free during a student's own gap between classes.
 
-### 🕒 Operating Hours & Free Time (C1)
-- Building operating hours are configured as **06:00 to 22:00 (6 AM to 10 PM)**.
-- Free intervals are strictly bounded by these hours. When a room has no more classes for the day, FreeRoom displays **"Free until 10:00 PM"** instead of an unbounded interval.
-- Before 06:00 or after 22:00, the building is marked closed.
+## Target Users
 
-### 🪑 Room Capacities & 2B Partition Hierarchy (C16)
-- Standard lecture classrooms have **200 seats**.
-- Partitioned room **2B** splits into **2B1 (100 seats)** and **2B2 (100 seats)**.
-- Booking/class in parent room 2B blocks both sub-rooms 2B1 and 2B2; a class in either 2B1 or 2B2 marks 2B occupied while leaving the other half free.
-- Capacity filter allows students to search for rooms meeting minimum seat counts (e.g. 50, 100, 200).
+- **Students** of one college building (pilot: Batch 2028 Term 9 and Batch 2029 Term 5, with Batch 2030 to follow). They want to find a free room quickly, between classes or for a specific time later.
+- **Admins** (college staff) who keep the timetable up to date. They import the weekly timetable, cancel single classes, add one-off events and enter exam closures.
 
-### 📅 Terms, Batches, & Relational Timetable (C3, C4, C17, C18)
-- Academic calendar is organized into **Batches** (e.g. Batch 2028, Batch 2029, Batch 2030) and **Terms** (e.g. Semester 3 / Term 5; Semester 5 / Term 9).
-- Timetable entries belong to specific terms with start and end dates.
-- Importer parses multi-attribute cells:
-  - **Batch & Groups:** Group A, Group B, Group C, or combined cohorts (Group A+B, whole batch).
-  - **Subject:** Normalized course names (MERN, CN, CML, FDSA Repeat, etc.).
-  - **Instructor:** Faculty name parsed and linked.
-  - **Class Type:** Categorized as **lecture**, **lab** (e.g. "MERN (Lab)"), or **club** (Academic Clubs).
-  - **Provenance:** Raw Excel cell location (`sheet_name`, `sheet_row`, `sheet_col`, `raw_cell`, `source_file`) saved for full administrative transparency.
+## Solution
 
-### 📄 Multi-Batch Sheet Compatibility (C21, C22)
-- Supports structural differences across batch sheets (2-group vs 3-group layouts, column headers, bracketed room names).
-- Normalizes diverse room naming variations (e.g. `"Class C Ground floor"`, `"class C Ground floor"`, `"(Classroom C, 2nd Floor)"`) via an alias mapping table.
-- Propagates course context to dependent un-named "Lab" cells located directly beneath lecture cells.
-- **Cross-batch overlap warnings:** Classes from different batches scheduled in the same room generate administrative warnings rather than blocking uploads.
-- **Club event deduplication:** Academic club events appearing identically in both 2028 and 2029 sheets are automatically deduplicated.
+FreeRoom turns the weekly timetable spreadsheet into a live availability view. The timetable is imported once per term, and closures and one-off events are entered by admins. The app then works out, for every room and every moment in building hours, whether the room is busy or free, and for how long. Students see this on three pages, without signing in.
 
-### 🚫 Exam & Emergency Closures (C6, C7, C8, C9)
-- **Three Scopes:** Building-wide, Floor-wide, or Room-specific closures.
-- **Precedence:** Closures rank above timetable schedules. A floor closure blocks every room on that floor; a closure on 2B blocks 2B1 and 2B2.
-- **Multi-day & Time Ranges:** Closures support single-day, multi-day exam periods, or partial-day hour windows (e.g. 09:00–13:00).
-- **Student UI:** Closure banner displayed prominently; closed rooms appear greyed out with exam badges and reasons; timeline displays distinct red closure blocks.
-- **Admin Management:** Intuitive closures page with list, delete, filter, and 2-step confirmation modal before applying whole-building shutdowns.
+## Key Features
 
-### 🏖️ No-Class Days for Holidays & Breaks (C2, C12)
-- Replaces v1's closed-building assumption: college buildings remain open on holidays and breaks, but classes do not run.
-- Admin can mark dates as **No-Class Days**, skipping weekly timetable classes so all rooms remain open and free for self-study.
+**Students (no sign-in needed to browse)**
 
-### ⚡ Caching & Invalidation (C10)
-- In-memory availability cache with 60-second TTL for free-now, free-window, and room timeline calculations.
-- Automatic cache invalidation upon any schedule mutation (term create/edit/delete, timetable upload, closure create/merge/delete, no-class day change, or class cancellation).
+- **Free now:** all rooms that are free at this moment, with the time each one stays free. Filter by the minimum free time (any, 30 minutes, 1 hour, 2 hours).
+- **Find a room:** pick a date (defaults to the next day), a time window and a floor to see free rooms. Open any room to see its full day: the batch, group, subject and teacher in each booked slot, and the free gaps.
+- **My group:** pick a day and see your batch and group's classes, with the free rooms available during each gap. Your batch and group are asked for on your first visit and remembered on that device.
+- **Next day timetable:** the rooms that open in the morning and what is booked in them.
+- **Sign in with Google (optional):** signed-in students keep their batch, group and favourite rooms across devices.
 
-### 🔍 Error & Failure Handling (C11)
-- Rejection of closures where end precedes start (dates or times).
-- 404 validation for closures on non-existent rooms or floors.
-- Overlapping closures are automatically merged into an expanded range.
-- Same-batch overlapping terms are rejected (409 Conflict); cross-batch sharing is permitted.
-- Dates outside any defined academic term show room availability as `"unknown"`, never falsely reported as free (C5).
-- Timetable rows with dates outside their term are flagged with row errors.
+**Admins (sign-in and admin role required)**
 
----
+- Import a weekly timetable from an `.xlsx` export, with validation and room name matching.
+- Schedule one-off events (seminars, exams, club meetings) with clash detection.
+- Cancel a single class on a given date to free its room.
+- Add holidays and breaks, and exam or room closures for a room, a floor or the whole building.
+- View the action log of every change an admin has made.
 
-## 2. Architecture Diagram
+## Deployment
 
-```mermaid
-graph TD
-    subgraph Client ["Frontend (React + Vite, Vanilla CSS)"]
-        UI_Home["Free Now Page"]
-        UI_Plan["Plan Future Window"]
-        UI_Room["Room Timeline & Detail"]
-        UI_Admin["Admin Suite (Terms, Timetable, Closures)"]
-        ClientService["services/api.js (JWT Auth)"]
-    end
+- **Live app:** [https://freeroom-nine.vercel.app/](https://freeroom-nine.vercel.app/)
+- **Demo video:** [https://youtu.be/dG45sPS2R54 ](https://youtu.be/dG45sPS2R54)
+- **Hosting:** 
+  - **Client (Frontend):** Vercel
+  - **Server (Backend API):** Render Web Service
+  - **Database:** Supabase
 
-    subgraph Server ["Backend (Node.js + Express API)"]
-        AuthRoutes["routes/auth.js (Google OAuth & Dev Login)"]
-        RoomRoutes["routes/rooms.js (Free-now, Free-window, Timelines)"]
-        AdminRoutes["routes/admin.js (CRUD Operations & Uploads)"]
-        
-        subgraph EngineLayer ["Core Engine & Caching"]
-            Cache["services/cache.js (AvailabilityCache, TTL 60s)"]
-            Engine["services/availabilityEngine.js"]
-            Importer["services/timetableImport.js"]
-        end
-    end
+## Tech Stack
 
-    subgraph Database ["PostgreSQL Database"]
-        DB_Core[("buildings, rooms, room_aliases")]
-        DB_Academic[("batches, terms, groups, subjects, instructors")]
-        DB_Timetable[("timetable_entries, timetable_entry_groups")]
-        DB_Overrides[("closures, no_class_days, schedule_exceptions, events")]
-        DB_Users[("users, reports")]
-    end
+- **Frontend:** React 19 (`^19.3.1`) built with Vite 8 (`^8.3.4`), React Router v7 (`^7.18.4`), Axios (`^1.20.0`), React Hot Toast (`^2.6.1`), and React Icons (`^5.7.0`)
+- **Backend:** Node.js (v18+) with Express (`^4.21.0`), ES Modules, CORS (`^2.8.5`), and Express Rate Limit (`^7.4.1`)
+- **Database:** PostgreSQL (v14+) accessed via `pg` (`node-postgres ^8.13.0`) with connection pooling and relational migrations
+- **Authentication:** Google OAuth 2.0 via `@react-oauth/google` and `google-auth-library` (`^9.14.1`), JSON Web Tokens (`jsonwebtoken ^9.0.2`), and environment-backed credentials authentication for administrators
+- **Timetable import:** SheetJS (`xlsx ^0.18.5`) for Excel spreadsheet parsing, with `multer` (`^1.4.5-lts.1`) for multipart file uploads
+- **Styling:** Vanilla CSS with custom design tokens supporting three theme modes (Light, Dark, and Darker)
 
-    ClientService -->|REST API / JSON| RoomRoutes
-    ClientService -->|REST API / JSON| AdminRoutes
-    ClientService -->|REST API / JSON| AuthRoutes
+## Architecture
 
-    RoomRoutes --> Cache
-    RoomRoutes --> Engine
-    AdminRoutes --> Importer
-    AdminRoutes -->|Invalidate| Cache
-
-    Engine --> DB_Core
-    Engine --> DB_Academic
-    Engine --> DB_Timetable
-    Engine --> DB_Overrides
-
-    Importer --> DB_Academic
-    Importer --> DB_Timetable
+```text
+Browser (React)
+   │  HTTPS, JSON
+   ▼
+Express API
+   ├── Auth: Google sign-in, JWT, admin role check on every admin route
+   ├── Timetable import: .xlsx → validate → batch, term, group, subject, room entries
+   ├── Availability engine
+   └── Admin actions: closures, cancellations, one-off events, action log
+   │
+   ▼
+PostgreSQL
+   batch · term · group · subject · instructor · timetable entry · room · closure · no-class day · admin action
 ```
 
----
+**Availability engine.** For a given room and moment, the engine:
 
-## 3. Database Schema (Entity-Relationship Diagram)
+1. Finds the term that covers the date.
+2. Collects the room's busy blocks from the timetable for that weekday.
+3. Adds closure blocks (exams, maintenance) and one-off events, which override the timetable.
+4. Subtracts the busy blocks from building hours (6:00 am to 10:00 pm) to get free gaps, and reports each room as free or busy with the time it stays that way.
 
-```mermaid
-erDiagram
-    BUILDINGS ||--o{ ROOMS : contains
-    ROOMS ||--o{ ROOMS : "parent (2B -> 2B1, 2B2)"
-    ROOMS ||--o{ ROOM_ALIASES : mapped_by
-    
-    BATCHES ||--o{ TERMS : has
-    BATCHES ||--o{ GROUPS : contains
-    
-    TERMS ||--o{ TIMETABLE_ENTRIES : contains
-    ROOMS ||--o{ TIMETABLE_ENTRIES : hosts
-    SUBJECTS ||--o{ TIMETABLE_ENTRIES : taught_in
-    INSTRUCTORS ||--o{ TIMETABLE_ENTRIES : instructs
-    
-    TIMETABLE_ENTRIES ||--o{ TIMETABLE_ENTRY_GROUPS : links
-    GROUPS ||--o{ TIMETABLE_ENTRY_GROUPS : attends
+**Rooms.** Ground floor: C. First floor: 1A, 1B. Second floor: 2A, 2C, and 2B, which can be split into 2B1 and 2B2 (100 seats each). 2B is free only when both halves are free.
 
-    BUILDINGS ||--o{ CLOSURES : applies_to
-    ROOMS ||--o{ CLOSURES : applies_to
-    BUILDINGS ||--o{ NO_CLASS_DAYS : observed_in
+**Errors handled.** Invalid timetable rows are reported at import, and the admin can import only valid rows. Failed network requests show a retry message. Admin routes return 403 for non-admin accounts. A corrupt or missing saved batch and group makes the batch picker appear before the schedule loads.
 
-    TIMETABLE_ENTRIES ||--o{ SCHEDULE_EXCEPTIONS : cancelled_on
-    ROOMS ||--o{ EVENTS : hosts
+## Originality and Credits
 
-    USERS ||--o{ CLOSURES : creates
-    USERS ||--o{ NO_CLASS_DAYS : creates
-    USERS ||--o{ REPORTS : submits
-```
+- **React 19 & Vite 8:** For component-driven architecture, fast Hot Module Replacement (HMR), and optimized bundle compilation.
+- **SheetJS (`xlsx`):** For client-side and server-side parsing of raw Excel timetable workbooks into relational data structures.
+- **PostgreSQL & `pg`:** High-performance relational storage for complex term schedules, partition hierarchies, and ACID-compliant transactional updates.
+- **Google Identity Services & `@react-oauth/google`:** Secure, modern OAuth 2.0 sign-in without requiring third-party redirect popups.
+- **Heroicons / React Icons:** Clean, accessible SVG iconography tailored for schedule navigation.
+- **React Hot Toast:** Accessible micro-notifications for feedback on schedule operations, admin actions, and authentication.
+- **Availability Interval Algorithm:** Developed specifically for FreeRoom to perform dynamic interval subtraction against building operating hours, factoring in partition overlaps, exam closures, and one-off events.
 
----
+## Status
 
-## 4. Availability Engine Execution Lifecycle
-
-For any given room and date query:
-
-1. **Term Lookup:** Determine if any academic term covers the queried date. If none exists, return status `"unknown"`.
-2. **Holiday / No-Class Day Check:** Verify if the date is marked as a no-class day. If so, weekly timetable occurrences are skipped.
-3. **Weekly Timetable Expansion:** For active terms, expand recurring timetable rows matching the query day of week, applying the configured 5-minute pre/post class buffer.
-4. **Partition Hierarchy Expansion:** If querying 2B, aggregate classes from sub-rooms 2B1 and 2B2; if querying 2B1 or 2B2, aggregate classes from 2B.
-5. **Exception Subtraction:** Remove occurrences cancelled via `schedule_exceptions`.
-6. **One-Off Events:** Merge one-off room events.
-7. **Exam Closures Block Injection:** Query all closures matching the building, floor, or specific room (including 2B partition hierarchy). Closures rank with highest priority.
-8. **Gap Calculation:** Bounded by building hours (**06:00 to 22:00**), calculate free intervals between busy blocks.
-9. **Result Resolution:**
-   - If a closure covers the window or whole day: return `"closed"` with reason and scope.
-   - If free for the requested duration: return `"free"` with `free_until` (capped at 22:00).
-   - If busy: return `"busy"` with details of current/upcoming class.
-10. **Cache Store:** Results cached in memory for 60 seconds.
-
----
-
-## 5. Development & Testing
-
-### Prerequisites
-- Node.js (v18+)
-- PostgreSQL (v14+)
-
-### Configuration (`.env`)
-```env
-PORT=5000
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/freeroom
-CAMPUS_TIMEZONE=Asia/Kolkata
-BUILDING_OPENING_TIME=06:00
-BUILDING_CLOSING_TIME=22:00
-BUFFER_MINUTES=5
-JWT_SECRET=supersecretjwtkeyforfreeroom
-```
-
-### Setup & Database Seeding
-```bash
-# Install root, server, and client dependencies
-npm install
-cd server && npm install
-cd ../client && npm install
-cd ..
-
-# Run database migrations and seed v2 batches, terms, and sheets
-node server/src/config/migrate.js
-node server/src/config/seed.js
-```
-
-### Running Tests
-The test suite contains 99 automated unit tests covering timezone calculations, availability engine, timetable parsing, term boundaries, cache invalidation, and failure handling:
-```bash
-cd server
-npx vitest run
-```
-
-### Running the App Locally
-```bash
-# Start both client and server concurrently
-node start.js
-```
-- Frontend: `http://localhost:5173`
-- Backend API: `http://localhost:5000`
+- **Working:**
+  - Live "Free now" room occupancy status with interval countdowns and duration filters.
+  - "Find a room" future time-window query with floor filters and full-day room timeline breakdowns.
+  - "My group" personalised schedule with automatic gap detection and vacant room recommendations.
+  - Room 2B partition hierarchy: smart synchronization between parent room 2B (200 seats) and sub-rooms 2B1/2B2 (100 seats each).
+  - Guest browsing: students browse all screens without requiring an account.
+  - Google OAuth sign-in and cross-device sync for saved batch, group, and settings.
+  - Admin login with Google OAuth and environment-configured credentials (`ADMIN_USERS`).
+  - Admin dashboard: timetable master view, Excel spreadsheet importer with alias normalization, single-class cancellations, one-off events with conflict detection, exam/emergency closures, and administrative action logs.
+  - Theme switching across Light, Dark, and Darker themes with responsive mobile sheet support.
+- **Planned:**
+  - Push and calendar notifications for last-minute class cancellations or room reassignments.
+  - Multi-building support across campus expansion sites.
+  - Batch 2030 automated timetable ingestion upon academic term release.

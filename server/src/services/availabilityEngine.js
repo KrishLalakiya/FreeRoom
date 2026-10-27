@@ -152,6 +152,29 @@ export async function getNextDayTimetableData(buildingId, targetDate, targetDow,
 }
 
 /**
+ * PRD v5: 2B rule across all pages
+ * Show 2B card only when 2B1 and 2B2 are both free; otherwise show free halves.
+ */
+export function apply2BRule(roomsList) {
+  if (!roomsList || roomsList.length === 0) return [];
+  const names = new Set(roomsList.map((r) => (typeof r === 'string' ? r : r.name)));
+  const has2B1 = names.has('2B1');
+  const has2B2 = names.has('2B2');
+
+  if (has2B1 && has2B2) {
+    return roomsList.filter((r) => {
+      const name = typeof r === 'string' ? r : r.name;
+      return name !== '2B1' && name !== '2B2';
+    });
+  }
+
+  return roomsList.filter((r) => {
+    const name = typeof r === 'string' ? r : r.name;
+    return name !== '2B';
+  });
+}
+
+/**
  * Get all rooms with their availability status for a given moment.
  *
  * Returns an envelope so callers can distinguish "no free rooms" from
@@ -322,6 +345,10 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
   );
 
   const nextDay = await getNextDayTimetableData(buildingId, nextDateStr, nextDow, building, rooms);
+  if (nextDay && nextDay.rooms) {
+    nextDay.rooms = apply2BRule(nextDay.rooms);
+  }
+  const dedupedResults = apply2BRule(results);
 
   if (isAfterLastClass) {
     const afterLastClassResult = {
@@ -329,7 +356,7 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
       reason: 'All classes for today have ended.',
       is_after_last_class: true,
       last_class_time: maxEndStr,
-      rooms: results,
+      rooms: dedupedResults,
       closed_rooms: closedResults,
       coverage,
       next_day: nextDay,
@@ -343,7 +370,7 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
   const finalResult = {
     status: 'ok',
     is_after_last_class: false,
-    rooms: results,
+    rooms: dedupedResults,
     closed_rooms: closedResults,
     coverage,
     next_day: nextDay,
@@ -458,10 +485,15 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
           .filter((b) => b.start >= windowEnd)
           .sort((a, b) => a.start - b.start)[0] || null;
 
+        const freeUntilUtc = isFreeUntilClose ? dayEnd : (nextBusy ? nextBusy.start : matchingInterval.end);
+        const freeMs = freeUntilUtc.getTime() - windowStart.getTime();
+        const freeMin = Math.max(0, Math.floor(freeMs / 60000));
+
         results.push({
           ...room,
-          status: 'free_for_window',
-          free_until: isFreeUntilClose ? dayEnd : (nextBusy ? nextBusy.start : matchingInterval.end),
+          status: 'free',
+          free_until: freeUntilUtc instanceof Date ? freeUntilUtc.toISOString() : freeUntilUtc,
+          free_duration: freeMin,
           free_start: matchingInterval.start,
           next_event: nextBusy ? {
             title: nextBusy.subject_name || nextBusy.title || nextBusy.course_name,
@@ -475,7 +507,7 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
     }
   }
 
-  const finalResult = { status: 'ok', rooms: results, closed_rooms: closedResults, coverage };
+  const finalResult = { status: 'ok', rooms: apply2BRule(results), closed_rooms: closedResults, coverage };
   if (!bypassCache) {
     availabilityCache.set(cacheKey, finalResult);
   }

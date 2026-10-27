@@ -23,8 +23,15 @@ async function migrate() {
         avatar_url    TEXT,
         role          VARCHAR(20) NOT NULL DEFAULT 'student'
                         CHECK (role IN ('student', 'admin')),
+        settings      JSONB NOT NULL DEFAULT '{}'::jsonb,
         created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    // Ensure settings column exists if table was created previously
+    await client.query(`
+      ALTER TABLE users
+      ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'::jsonb;
     `);
 
     // ── Buildings ──────────────────────────────────────────
@@ -310,6 +317,24 @@ async function migrate() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_no_class_days_date
       ON no_class_days (date);
+    `);
+
+    // ── Admin action log (PRD v5: logs every admin action with name and time) ──
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS admin_actions (
+        id          SERIAL PRIMARY KEY,
+        admin_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        admin_name  VARCHAR(255) NOT NULL,
+        action_type VARCHAR(100) NOT NULL,
+        description TEXT NOT NULL,
+        details     JSONB,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_admin_actions_created_at
+      ON admin_actions (created_at DESC);
     `);
 
     await client.query('COMMIT');

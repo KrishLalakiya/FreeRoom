@@ -132,14 +132,12 @@ export default function Navbar() {
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  if (!user) return null;
-
-  const initials = user.name
+  const initials = user?.name
     ? user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
-    : (user.email ? user.email[0].toUpperCase() : 'K');
+    : (user?.email ? user.email[0].toUpperCase() : 'S');
 
   const handleRename = () => {
-    if (!newName.trim()) return;
+    if (!newName.trim() || !user) return;
     const updated = { ...user, name: newName.trim() };
     localStorage.setItem('freeroom_user', JSON.stringify(updated));
     window.location.reload();
@@ -169,11 +167,6 @@ export default function Navbar() {
             <Link to="/my-group" className={`pc-nav-item${isGroupActive ? ' active' : ''}`}>
               My group
             </Link>
-            {isAdmin && (
-              <Link to="/admin" className={`pc-nav-item${isAdminActive ? ' active' : ''}`}>
-                Admin
-              </Link>
-            )}
           </nav>
         </div>
 
@@ -201,33 +194,35 @@ export default function Navbar() {
             </div>
           </div>
 
-          <div className="avatar-wrap" ref={menuRef}>
-            <button
-              className="avatar-btn"
-              title={`Profile ${initials}`}
-              aria-label="Account menu"
-              onClick={() => {
-                if (window.innerWidth <= 768) {
-                  setMobileSheetOpen(true);
-                } else {
-                  setMenuOpen((v) => !v);
-                }
-                setRenaming(false);
-              }}
-            >
-              {user.avatar_url ? (
-                <img src={user.avatar_url} alt={user.name} className="avatar-img" />
-              ) : (
-                initials
-              )}
-            </button>
+          {/* PRD v6 Section 4: Sign in button where avatar would be for guests; avatar menu for signed-in */}
+          {user ? (
+            <div className="avatar-wrap" ref={menuRef}>
+              <button
+                className="avatar-btn"
+                title={`Profile ${initials}`}
+                aria-label="Account menu"
+                onClick={() => {
+                  if (window.innerWidth <= 768) {
+                    setMobileSheetOpen(true);
+                  } else {
+                    setMenuOpen((v) => !v);
+                  }
+                  setRenaming(false);
+                }}
+              >
+                {user.avatar_url ? (
+                  <img src={user.avatar_url} alt={user.name} className="avatar-img" />
+                ) : (
+                  initials
+                )}
+              </button>
 
-            {/* PC Account Dropdown Menu */}
-            {menuOpen && (
-              <div className="account-dropdown">
-                <div className="account-info">
-                  <div className="account-name">{user.name || 'Student'}</div>
-                  <div className="account-email">{user.email}</div>
+              {/* PC Account Dropdown Menu */}
+              {menuOpen && (
+                <div className="account-dropdown">
+                  <div className="account-info">
+                    <div className="account-name">{user.name || 'Student'}</div>
+                    <div className="account-email">{user.email}</div>
                 </div>
                 <div className="account-divider" />
                 {renaming ? (
@@ -305,13 +300,22 @@ export default function Navbar() {
               </div>
             )}
           </div>
-        </div>
-      </header>
+        ) : (
+          <Link
+            to={`/login?returnTo=${encodeURIComponent(location.pathname + location.search)}`}
+            className="btn-header-signin"
+            id="header-signin-btn"
+          >
+            Sign in
+          </Link>
+        )}
+      </div>
+    </header>
 
-      {/* ── MOBILE ACCOUNT SHEET ─────────────────────────────── */}
-      {mobileSheetOpen && (
-        <div
-          className="mobile-sheet-backdrop"
+    {/* ── MOBILE ACCOUNT SHEET ─────────────────────────────── */}
+    {mobileSheetOpen && user && (
+      <div
+        className="mobile-sheet-backdrop"
           onClick={() => { setMobileSheetOpen(false); setRenaming(false); }}
         >
           <div className="mobile-sheet" onClick={(e) => e.stopPropagation()}>
@@ -411,12 +415,6 @@ export default function Navbar() {
           <IconUsers />
           <span>My group</span>
         </Link>
-        {isAdmin && (
-          <Link to="/admin" className={`bottom-nav-item${isAdminActive ? ' active' : ''}`}>
-            <IconCog />
-            <span>Admin</span>
-          </Link>
-        )}
       </nav>
     </>
   );

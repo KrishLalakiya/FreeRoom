@@ -284,9 +284,13 @@ export default function DatePicker({
         </>
       )}
 
-      {/* Pop-up Calendar Dropdown */}
+      {/* Pop-up or Inline Calendar */}
       {isOpen && (
-        <div className="custom-datepicker-popup" role="dialog" aria-modal="true">
+        <div
+          className={variant === 'fr-card' ? 'fr-date-inline-calendar' : 'custom-datepicker-popup'}
+          role="dialog"
+          aria-modal={variant !== 'fr-card'}
+        >
           {/* Header Month / Year Navigation */}
           <div className="datepicker-header">
             <button

@@ -52,7 +52,7 @@ function getUntilAndLeft(room) {
 export default function RoomCard({ room, onClick }) {
   const isClosed = room.status === 'closed';
   const { until, left, isUrgent } = getUntilAndLeft(room);
-  const submeta = room.name === '2B' ? 'or 2B1 and 2B2, 100 seats each' : null;
+  const floorStr = room.floor ? room.floor.replace(/\s*floor/i, '') : '';
 
   return (
     <article
@@ -67,9 +67,8 @@ export default function RoomCard({ room, onClick }) {
         <div>
           <div className="room-code">{room.name}</div>
           <div className="room-meta">
-            {room.floor} floor · {room.capacity ?? '—'} seats
+            {floorStr ? `${floorStr} · ` : ''}{room.capacity ?? '—'} seats
           </div>
-          {submeta && <div className="room-submeta">{submeta}</div>}
         </div>
 
         {isClosed ? (

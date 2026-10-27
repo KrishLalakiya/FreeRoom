@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { adminAPI, roomsAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import Navbar from '../components/Navbar';
+import { useTheme } from '../context/ThemeContext';
 import {
   HiOutlineCalendar,
   HiOutlinePlusCircle,
@@ -15,10 +15,189 @@ import {
   HiOutlineCheckCircle,
   HiOutlineExclamationCircle,
   HiOutlineLockClosed,
+  HiOutlineClock,
 } from 'react-icons/hi';
 import toast from 'react-hot-toast';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function AdminNavbar() {
+  const { user, logout } = useAuth();
+  const { isDark, toggleTheme } = useTheme();
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const initials = user?.name
+    ? user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
+    : 'A';
+
+  return (
+    <header className="app-header">
+      {/* Brand */}
+      <div className="header-left">
+        <Link to="/admin" className="brand-logo" style={{ display: 'inline-flex', alignItems: 'center', gap: 10, textDecoration: 'none' }}>
+          <div style={{ width: 32, height: 32, fontSize: 13, background: 'var(--accent-black)', color: 'var(--accent-black-text)', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800 }}>
+            FR
+          </div>
+          <span style={{ fontWeight: 700, fontSize: 16, color: 'var(--text-primary)' }}>
+            FreeRoom <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 6px', background: 'var(--bg-subtle)', borderRadius: 4, color: 'var(--text-secondary)', marginLeft: 4, textTransform: 'uppercase' }}>Admin</span>
+          </span>
+        </Link>
+      </div>
+
+      {/* Right side: theme toggle, admin name, avatar */}
+      <div className="header-right-actions">
+        <button
+          type="button"
+          className="theme-quick-btn"
+          onClick={toggleTheme}
+          title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label="Toggle theme"
+        >
+          {isDark ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="4.5" />
+              <line x1="12" y1="2" x2="12" y2="4.5" />
+              <line x1="12" y1="19.5" x2="12" y2="22" />
+              <line x1="4.22" y1="4.22" x2="6" y2="6" />
+              <line x1="18" y1="18" x2="19.78" y2="19.78" />
+              <line x1="2" y1="12" x2="4.5" y2="12" />
+              <line x1="19.5" y1="12" x2="22" y2="12" />
+              <line x1="4.22" y1="19.78" x2="6" y2="18" />
+              <line x1="18" y1="6" x2="19.78" y2="4.22" />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          )}
+        </button>
+
+        <span className="admin-name-text" style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-secondary)' }}>
+          {user?.name || user?.email || 'Admin'}
+        </span>
+
+        <div className="avatar-wrap" ref={dropdownRef}>
+          <button
+            type="button"
+            className="avatar-btn"
+            onClick={() => setDropdownOpen(!dropdownOpen)}
+            aria-label="Admin account menu"
+          >
+            {initials}
+          </button>
+
+          {dropdownOpen && (
+            <div
+              className="account-dropdown"
+              style={{
+                position: 'absolute',
+                right: 0,
+                top: 'calc(100% + 8px)',
+                zIndex: 1100,
+                minWidth: 200,
+              }}
+            >
+              <div className="account-info">
+                <div className="account-name">{user?.name || 'Admin'}</div>
+                <div className="account-email">{user?.email}</div>
+              </div>
+              <div className="account-divider" />
+              <button
+                type="button"
+                className="account-menu-item"
+                onClick={logout}
+                style={{
+                  color: 'var(--urgent-text, #ef4444)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  width: '100%',
+                  border: 'none',
+                  background: 'none',
+                }}
+              >
+                Sign out
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function ActionLogCard({ logs }) {
+  return (
+    <div className="admin-card" style={{ marginTop: 24 }}>
+      <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <HiOutlineClock size={20} style={{ color: 'var(--accent-primary)' }} />
+        Action log
+      </h2>
+      <p className="section-subtitle" style={{ marginBottom: 16 }}>
+        Every admin action is logged with the admin's name and the time.
+      </p>
+
+      {logs.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-secondary)', fontSize: '13.5px' }}>
+          No admin actions recorded yet.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 300, overflowY: 'auto' }}>
+          {logs.map((log) => {
+            const dateObj = new Date(log.created_at);
+            const timeStr = isNaN(dateObj.getTime())
+              ? ''
+              : dateObj.toLocaleDateString('en-GB', {
+                  day: 'numeric',
+                  month: 'short',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                  hour12: true,
+                });
+
+            return (
+              <div
+                key={log.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '10px 14px',
+                  background: 'var(--bg-subtle)',
+                  border: '1px solid var(--border-control)',
+                  borderRadius: 'var(--radius-md)',
+                  fontSize: '13px',
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 }}>
+                    {log.description}
+                  </div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
+                    by <strong>{log.admin_name}</strong>
+                  </div>
+                </div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '12px', whiteSpace: 'nowrap', marginLeft: 12 }}>
+                  {timeStr}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function AdminPage() {
   const { user, isAdmin } = useAuth();
@@ -80,7 +259,7 @@ export default function AdminPage() {
   const [closureIsWholeDay, setClosureIsWholeDay] = useState(true);
   const [closureStartTime, setClosureStartTime] = useState('09:00');
   const [closureEndTime, setClosureEndTime] = useState('13:00');
-  const [closureReason, setClosureReason] = useState('Exam');
+  const [closureReason, setClosureReason] = useState('');
   const [closureNote, setClosureNote] = useState('');
   const [creatingClosure, setCreatingClosure] = useState(false);
 
@@ -89,6 +268,9 @@ export default function AdminPage() {
   const [newNoClassDate, setNewNoClassDate] = useState(new Date().toISOString().split('T')[0]);
   const [newNoClassReason, setNewNoClassReason] = useState('Holiday / Break');
   const [savingNoClassDay, setSavingNoClassDay] = useState(false);
+
+  // Action log state (PRD v5)
+  const [actionLogs, setActionLogs] = useState([]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -100,10 +282,19 @@ export default function AdminPage() {
     loadInitialData();
   }, [isAdmin, navigate]);
 
+  const refreshActionLogs = async () => {
+    try {
+      const res = await adminAPI.getActionLogs();
+      setActionLogs(res.data.actions || []);
+    } catch (err) {
+      console.error('Failed to refresh action logs:', err);
+    }
+  };
+
   const loadInitialData = async () => {
     setLoading(true);
     try {
-      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes, closuresRes, noClassRes] = await Promise.all([
+      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes, closuresRes, noClassRes, logsRes] = await Promise.all([
         roomsAPI.list(1),
         adminAPI.getEvents(),
         adminAPI.getTimetable(),
@@ -111,12 +302,12 @@ export default function AdminPage() {
         adminAPI.getTerms(),
         adminAPI.getClosures(),
         adminAPI.getNoClassDays(),
+        adminAPI.getActionLogs(),
       ]);
 
       const rList = roomsRes.data.rooms || [];
       setRooms(rList);
       if (rList.length > 0) {
-        setEventRoomId((current) => current || rList[0].id);
         setAliasRoomId((current) => current || rList[0].id);
         setClosureRoomId((current) => current || rList[0].id.toString());
         setClosureFloor((current) => current || rList[0].floor || 'Ground');
@@ -126,12 +317,8 @@ export default function AdminPage() {
       setAliases(aliasesRes.data.aliases || []);
       setClosures(closuresRes.data.closures || []);
       setNoClassDays(noClassRes.data.noClassDays || []);
-
-      const tList = termsRes.data.terms || [];
-      setTerms(tList);
-      if (tList.length > 0) {
-        setSelectedTermId((current) => current || tList[0].id.toString());
-      }
+      setTerms(termsRes.data.terms || []);
+      setActionLogs(logsRes.data.actions || []);
     } catch (err) {
       console.error('Failed to load admin data:', err);
       toast.error('Failed to load admin data');
@@ -169,6 +356,7 @@ export default function AdminPage() {
       // Refresh events list
       const res = await adminAPI.getEvents();
       setEvents(res.data.events || []);
+      await refreshActionLogs();
     } catch (err) {
       if (err.response?.status === 409) {
         toast.error(err.response.data.message || 'Time clash detected!');
@@ -187,6 +375,7 @@ export default function AdminPage() {
       await adminAPI.deleteEvent(eventId);
       toast.success('Event deleted');
       setEvents(events.filter((ev) => ev.id !== eventId));
+      await refreshActionLogs();
     } catch (err) {
       console.error('Failed to delete event:', err);
       toast.error('Failed to delete event');
@@ -210,6 +399,7 @@ export default function AdminPage() {
 
       toast.success('Class occurrence cancelled successfully for selected date!');
       setCancelReason('');
+      await refreshActionLogs();
     } catch (err) {
       if (err.response?.status === 409) {
         toast.error(err.response.data.message || 'Already cancelled for this date');
@@ -253,6 +443,7 @@ export default function AdminPage() {
       setTerms(refreshed.data.terms || []);
       setSelectedTermId(res.data.term.id.toString());
       setShowCreateTerm(false);
+      await refreshActionLogs();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to create term');
     } finally {
@@ -288,6 +479,7 @@ export default function AdminPage() {
       const timetableRes = await adminAPI.getTimetable();
       setTimetable(timetableRes.data.entries || []);
       setImportFile(null);
+      await refreshActionLogs();
     } catch (err) {
       const report = err.response?.data;
       if (report && report.errors) {
@@ -315,6 +507,7 @@ export default function AdminPage() {
       setAliasName('');
       const res = await adminAPI.getRoomAliases();
       setAliases(res.data.aliases || []);
+      await refreshActionLogs();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to save alias');
     } finally {
@@ -327,6 +520,7 @@ export default function AdminPage() {
       await adminAPI.deleteRoomAlias(aliasId);
       setAliases(aliases.filter((a) => a.id !== aliasId));
       toast.success('Alias deleted');
+      await refreshActionLogs();
     } catch (err) {
       toast.error('Failed to delete alias');
     }
@@ -382,6 +576,7 @@ export default function AdminPage() {
       setClosureNote('');
       const updated = await adminAPI.getClosures();
       setClosures(updated.data.closures || []);
+      await refreshActionLogs();
     } catch (err) {
       console.error('Failed to create closure:', err);
       toast.error(err.response?.data?.message || 'Failed to create closure');
@@ -396,6 +591,7 @@ export default function AdminPage() {
       await adminAPI.deleteClosure(closureId);
       toast.success('Closure removed');
       setClosures((prev) => prev.filter((c) => c.id !== closureId));
+      await refreshActionLogs();
     } catch (err) {
       console.error('Failed to delete closure:', err);
       toast.error('Failed to delete closure');
@@ -418,6 +614,7 @@ export default function AdminPage() {
       setNewNoClassReason('Holiday / Break');
       const res = await adminAPI.getNoClassDays();
       setNoClassDays(res.data.noClassDays || []);
+      await refreshActionLogs();
     } catch (err) {
       console.error('Failed to save no-class day:', err);
       toast.error(err.response?.data?.message || 'Failed to save no-class day');
@@ -432,6 +629,7 @@ export default function AdminPage() {
       await adminAPI.deleteNoClassDay(id);
       toast.success('No-class day removed');
       setNoClassDays((prev) => prev.filter((d) => d.id !== id));
+      await refreshActionLogs();
     } catch (err) {
       console.error('Failed to delete no-class day:', err);
       toast.error('Failed to delete no-class day');
@@ -440,12 +638,12 @@ export default function AdminPage() {
 
   return (
     <div className="v3-shell">
-      <Navbar />
+      <AdminNavbar />
       <div className="v3-main">
 
-      <button className="back-btn" onClick={() => navigate('/')}>
+      <button className="back-btn" onClick={() => setActiveTab('events')}>
         <HiOutlineArrowLeft size={16} />
-        Back to Dashboard
+        Back to admin home
       </button>
 
       {/* Admin Header */}
@@ -458,42 +656,61 @@ export default function AdminPage() {
         </p>
       </div>
 
-      {/* Tabs */}
-      <div className="search-tabs" style={{ marginBottom: 24 }}>
+      {/* Mobile Section Dropdown (PRD v5: five sections in one dropdown on phone) */}
+      <div className="admin-mobile-dropdown-wrap" style={{ marginBottom: 20 }}>
+        <label className="input-label" htmlFor="admin-section-select" style={{ marginBottom: 6 }}>
+          Section
+        </label>
+        <select
+          id="admin-section-select"
+          className="input-field"
+          value={activeTab}
+          onChange={(e) => setActiveTab(e.target.value)}
+        >
+          <option value="events">One-off events</option>
+          <option value="closures">Exam and room closures</option>
+          <option value="cancel">Cancel a class</option>
+          <option value="timetable">Master timetable</option>
+          <option value="import">Import timetable</option>
+        </select>
+      </div>
+
+      {/* Desktop Tabs (PRD v5: sentence case on all tabs and buttons) */}
+      <div className="search-tabs admin-desktop-tabs" style={{ marginBottom: 24 }}>
         <button
           className={`search-tab ${activeTab === 'events' ? 'search-tab-active' : ''}`}
           onClick={() => setActiveTab('events')}
         >
           <HiOutlineCalendar size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
-          One-Off Events
+          One-off events
         </button>
         <button
           className={`search-tab ${activeTab === 'closures' ? 'search-tab-active' : ''}`}
           onClick={() => setActiveTab('closures')}
         >
           <HiOutlineLockClosed size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
-          Exam & Room Closures
+          Exam and room closures
         </button>
         <button
           className={`search-tab ${activeTab === 'cancel' ? 'search-tab-active' : ''}`}
           onClick={() => setActiveTab('cancel')}
         >
           <HiOutlineBan size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
-          Cancel Class Occurrence
+          Cancel a class
         </button>
         <button
           className={`search-tab ${activeTab === 'timetable' ? 'search-tab-active' : ''}`}
           onClick={() => setActiveTab('timetable')}
         >
           <HiOutlineViewList size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
-          Master Timetable
+          Master timetable
         </button>
         <button
           className={`search-tab ${activeTab === 'import' ? 'search-tab-active' : ''}`}
           onClick={() => setActiveTab('import')}
         >
           <HiOutlineUpload size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
-          Import Timetable
+          Import timetable
         </button>
       </div>
 
@@ -519,6 +736,7 @@ export default function AdminPage() {
                   onChange={(e) => setEventRoomId(e.target.value)}
                   required
                 >
+                  <option value="" disabled>Choose a room</option>
                   {rooms.map((r) => (
                     <option key={r.id} value={r.id}>
                       Room {r.name} ({r.floor} Floor · {r.capacity} seats)
@@ -565,10 +783,10 @@ export default function AdminPage() {
               <button
                 type="submit"
                 className="btn btn-primary btn-full"
-                disabled={creatingEvent}
+                disabled={creatingEvent || !eventRoomId}
                 style={{ marginTop: 12 }}
               >
-                {creatingEvent ? 'Checking Clashes...' : 'Schedule Event'}
+                {creatingEvent ? 'Checking clashes...' : 'Schedule event'}
               </button>
             </form>
           </div>
@@ -830,12 +1048,19 @@ export default function AdminPage() {
                     onChange={(e) => setSelectedTermId(e.target.value)}
                     required
                   >
-                    <option value="">-- Choose Batch & Term --</option>
-                    {terms.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        Batch {t.batch_year} — Term {t.term_number} (Sem {t.semester_number}) [{String(t.start_date).slice(0, 10)} to {String(t.end_date).slice(0, 10)}]
-                      </option>
-                    ))}
+                    <option value="">Choose batch and term</option>
+                    {terms
+                      .filter((t) => {
+                        if (parseInt(t.batch_year, 10) === 2030) return false;
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        const endStr = String(t.end_date).slice(0, 10);
+                        return endStr >= todayStr;
+                      })
+                      .map((t) => (
+                        <option key={t.id} value={t.id}>
+                          Batch {t.batch_year} — Term {t.term_number} (Sem {t.semester_number}) [{String(t.start_date).slice(0, 10)} to {String(t.end_date).slice(0, 10)}]
+                        </option>
+                      ))}
                   </select>
                 </div>
 
@@ -934,7 +1159,7 @@ export default function AdminPage() {
                       disabled={creatingTerm}
                       onClick={handleCreateTerm}
                     >
-                      {creatingTerm ? 'Saving...' : 'Save Term'}
+                      {creatingTerm ? 'Saving...' : 'Save term'}
                     </button>
                   </div>
                 )}
@@ -953,7 +1178,7 @@ export default function AdminPage() {
                   className="btn btn-primary btn-full"
                   disabled={importing}
                 >
-                  {importing ? 'Validating & importing...' : 'Validate & Import'}
+                  {importing ? 'Validating & importing...' : 'Validate and import'}
                 </button>
               </form>
             </div>
@@ -961,7 +1186,7 @@ export default function AdminPage() {
             <div className="admin-card">
               <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <HiOutlineLink size={20} style={{ color: 'var(--accent-primary)' }} />
-                Room Name Aliases ({aliases.length})
+                Room name matching ({aliases.length})
               </h2>
               <p className="section-subtitle" style={{ marginBottom: 16 }}>
                 Map the spellings used in the sheet (e.g. "Class A 1st floor") to a real room.
@@ -971,7 +1196,7 @@ export default function AdminPage() {
               <form onSubmit={handleAddAlias} style={{ marginBottom: 16 }}>
                 <div className="form-row">
                   <div className="input-group">
-                    <label className="input-label">Spelling in sheet</label>
+                    <label className="input-label">Name in timetable file</label>
                     <input
                       type="text"
                       className="input-field"
@@ -996,7 +1221,7 @@ export default function AdminPage() {
                   </div>
                 </div>
                 <button type="submit" className="btn btn-ghost" disabled={savingAlias}>
-                  {savingAlias ? 'Saving...' : 'Add Alias'}
+                  {savingAlias ? 'Saving...' : 'Add match'}
                 </button>
               </form>
 
@@ -1004,7 +1229,7 @@ export default function AdminPage() {
                 <table className="admin-table">
                   <thead>
                     <tr>
-                      <th>Sheet Spelling</th>
+                      <th>Name in timetable file</th>
                       <th>Room</th>
                       <th>Action</th>
                     </tr>
@@ -1313,7 +1538,7 @@ export default function AdminPage() {
                 disabled={creatingClosure}
                 style={{ marginTop: 12 }}
               >
-                {creatingClosure ? 'Saving Closure...' : 'Schedule Closure'}
+                {creatingClosure ? 'Saving closure...' : 'Schedule closure'}
               </button>
             </form>
           </div>
@@ -1408,11 +1633,11 @@ export default function AdminPage() {
             )}
           </div>
 
-          {/* No-Class Days (Holidays & Breaks — C12) Card */}
+          {/* Holidays and breaks Card */}
           <div className="admin-card" style={{ gridColumn: '1 / -1', marginTop: 12 }}>
             <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
               <HiOutlineBan size={20} style={{ color: 'var(--accent-warning)' }} />
-              No-Class Days (Holidays & Breaks — C12)
+              Holidays and breaks
             </h2>
             <p className="section-subtitle" style={{ marginBottom: 16 }}>
               On marked holidays and breaks, recurring timetable classes do not run, leaving classrooms free for student study (unless closed by an exam closure).
@@ -1420,7 +1645,7 @@ export default function AdminPage() {
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
               <form onSubmit={handleCreateNoClassDay} style={{ background: 'var(--bg-card)', padding: 16, borderRadius: 8, border: '1px solid var(--border-color)' }}>
-                <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: 12 }}>Mark a No-Class Day</h3>
+                <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: 12 }}>Add a holiday or break</h3>
                 <div className="input-group">
                   <label className="input-label">Date</label>
                   <input
@@ -1448,13 +1673,13 @@ export default function AdminPage() {
                   disabled={savingNoClassDay}
                   style={{ marginTop: 8 }}
                 >
-                  {savingNoClassDay ? 'Saving...' : 'Mark as No-Class Day'}
+                  {savingNoClassDay ? 'Saving...' : 'Save holiday or break'}
                 </button>
               </form>
 
               <div>
                 <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: 12 }}>
-                  Marked No-Class Days ({noClassDays.length})
+                  Holidays and breaks ({noClassDays.length})
                 </h3>
                 {noClassDays.length === 0 ? (
                   <div className="empty-state" style={{ padding: 24 }}>
@@ -1495,6 +1720,9 @@ export default function AdminPage() {
           </div>
         </div>
       )}
+
+      {/* Action Log (PRD v5: Every admin action is logged and shown on admin home) */}
+      <ActionLogCard logs={actionLogs} />
 
       </div>
     </div>

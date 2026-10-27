@@ -4,6 +4,7 @@ import { roomsAPI } from '../services/api';
 import Navbar from '../components/Navbar';
 import RoomCard from '../components/RoomCard';
 import DatePicker, { getTodayStr, getTomorrowStr } from '../components/DatePicker';
+import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 
 /* ── Format Time Helpers ───────────────────────────────────── */
@@ -491,7 +492,9 @@ const ROOM_META = {
   '1A': { floor: '1st', seats: 200, submeta: null },
   '1B': { floor: '1st', seats: 200, submeta: null },
   '2A': { floor: '2nd', seats: 200, submeta: null },
-  '2B': { floor: '2nd', seats: 200, submeta: 'or 2B1 and 2B2, 100 seats each' },
+  '2B': { floor: '2nd', seats: 200, submeta: null },
+  '2B1': { floor: '2nd', seats: 100, submeta: null },
+  '2B2': { floor: '2nd', seats: 100, submeta: null },
   '2C': { floor: '2nd', seats: 200, submeta: null },
 };
 
@@ -534,6 +537,7 @@ function formatTimeFromDate(d) {
 }
 
 function FindRoomScreen() {
+  const { user, updateSettings } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const tomorrowStr = getTomorrowStr();
 
@@ -577,13 +581,16 @@ function FindRoomScreen() {
     }
   }, [paramRoom]);
 
-  // Persist selections
+  // Persist selections on device and sync to account when signed in (PRD v6 Section 3)
   useEffect(() => {
     if (date) localStorage.setItem('freeroom_find_date', date);
     if (fromTime) localStorage.setItem('freeroom_find_from', fromTime);
     if (toTime) localStorage.setItem('freeroom_find_to', toTime);
     if (floor) localStorage.setItem('freeroom_find_floor', floor);
-  }, [date, fromTime, toTime, floor]);
+    if (user && updateSettings) {
+      updateSettings({ lastDateWindow: { date, fromTime, toTime } });
+    }
+  }, [date, fromTime, toTime, floor, user, updateSettings]);
 
   // Mode switcher handler
   const handleSetMode = (newMode) => {
@@ -873,39 +880,14 @@ function FindRoomScreen() {
                   </p>
                 </div>
               ) : (
-                <div className="fr-results" id="findroom-list">
-                  {allRooms.map((r) => {
-                    const isClosed = r.status === 'closed';
-                    const submeta = r.name === '2B' ? 'or 2B1 and 2B2, 100 seats each' : null;
-                    const untilText = (() => {
-                      if (isClosed) return 'Closed for exams';
-                      if (!r.free_until) return 'until 10:00 pm';
-                      const d = new Date(r.free_until);
-                      if (isNaN(d.getTime())) return 'until 10:00 pm';
-                      const hr = d.getHours();
-                      const min = d.getMinutes();
-                      if (hr >= 22 || (hr === 21 && min > 50)) return 'until 10:00 pm';
-                      return `until ${d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
-                    })();
-
-                    return (
-                      <button
-                        key={r.id}
-                        type="button"
-                        className="fr-result"
-                        onClick={() => handleSelectRoom(r.name)}
-                      >
-                        <span className="fr-result-info">
-                          <span className="fr-room-name">{r.name}</span>
-                          <span className="fr-room-sub">{r.floor} · {r.capacity || 200} seats</span>
-                          {submeta && <span className="fr-room-submeta">{submeta}</span>}
-                        </span>
-                        <span className="fr-room-until" style={isClosed ? { color: 'var(--urgent-bg)' } : {}}>
-                          {untilText}
-                        </span>
-                      </button>
-                    );
-                  })}
+                <div className="rooms-grid" id="findroom-grid">
+                  {allRooms.map((r) => (
+                    <RoomCard
+                      key={r.id || r.name}
+                      room={r}
+                      onClick={() => handleSelectRoom(r.name)}
+                    />
+                  ))}
                 </div>
               )}
             </div>
@@ -1006,38 +988,275 @@ function filterGapRooms(roomsList) {
   return roomsList;
 }
 
+const BATCH_CONFIG = {
+  2027: { groups: ['A'], term: 13 },
+  2028: { groups: ['A', 'B'], term: 9 },
+  2029: { groups: ['A', 'B', 'C'], term: 5 },
+  2030: { groups: ['A', 'B', 'C', 'D', 'E'], term: 1 },
+};
+
+const BATCH_LIST = [2027, 2028, 2029, 2030];
+
+function GroupPickerModal({
+  isOpen,
+  onClose,
+  initialBatch,
+  initialGroupLetter,
+  onSave,
+}) {
+  const [selectedBatch, setSelectedBatch] = useState(initialBatch);
+  const [selectedGroupLetter, setSelectedGroupLetter] = useState(initialGroupLetter);
+  const [activeColumn, setActiveColumn] = useState('batch');
+
+  const batches = BATCH_LIST;
+  const currentGroups = BATCH_CONFIG[selectedBatch]?.groups || ['A'];
+
+  useEffect(() => {
+    if (isOpen) {
+      const validBatch = BATCH_LIST.includes(initialBatch) ? initialBatch : 2029;
+      const validGroups = BATCH_CONFIG[validBatch]?.groups || ['A'];
+      const safeGroup = validGroups.includes(initialGroupLetter) ? initialGroupLetter : validGroups[0];
+      setSelectedBatch(validBatch);
+      setSelectedGroupLetter(safeGroup);
+      setActiveColumn('batch');
+    }
+  }, [isOpen, initialBatch, initialGroupLetter]);
+
+  const handleSelectBatch = (b) => {
+    setSelectedBatch(b);
+    setActiveColumn('batch');
+    const validGroups = BATCH_CONFIG[b]?.groups || ['A'];
+    if (!validGroups.includes(selectedGroupLetter)) {
+      setSelectedGroupLetter(validGroups[0]);
+    }
+  };
+
+  const handleSelectGroup = (g) => {
+    setSelectedGroupLetter(g);
+    setActiveColumn('group');
+  };
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        onSave(selectedBatch, selectedGroupLetter);
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        setActiveColumn('batch');
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        setActiveColumn('group');
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (activeColumn === 'batch') {
+          const idx = batches.indexOf(selectedBatch);
+          const newB = idx > 0 ? batches[idx - 1] : batches[batches.length - 1];
+          handleSelectBatch(newB);
+        } else {
+          const validGroups = BATCH_CONFIG[selectedBatch]?.groups || ['A'];
+          const idx = validGroups.indexOf(selectedGroupLetter);
+          const newG = idx > 0 ? validGroups[idx - 1] : validGroups[validGroups.length - 1];
+          setSelectedGroupLetter(newG);
+        }
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (activeColumn === 'batch') {
+          const idx = batches.indexOf(selectedBatch);
+          const newB = idx < batches.length - 1 ? batches[idx + 1] : batches[0];
+          handleSelectBatch(newB);
+        } else {
+          const validGroups = BATCH_CONFIG[selectedBatch]?.groups || ['A'];
+          const idx = validGroups.indexOf(selectedGroupLetter);
+          const newG = idx < validGroups.length - 1 ? validGroups[idx + 1] : validGroups[0];
+          setSelectedGroupLetter(newG);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, activeColumn, selectedBatch, selectedGroupLetter, onClose, onSave]);
+
+  if (!isOpen) return null;
+
+  const termNum = BATCH_CONFIG[selectedBatch]?.term || 5;
+
+  return (
+    <div className="group-picker-backdrop" onClick={onClose}>
+      <div
+        className="group-picker-container"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Choose batch and group"
+      >
+        <div className="group-picker-header">
+          <h3 className="group-picker-title">Choose batch and group</h3>
+          <p className="group-picker-sub">Pick your batch year and group</p>
+        </div>
+
+        <div className="picker-wheels-wrapper">
+          {/* Batch Column */}
+          <div
+            className={`picker-wheel-col${activeColumn === 'batch' ? ' col-active' : ''}`}
+            onClick={() => setActiveColumn('batch')}
+          >
+            <div className="picker-wheel-label">Batch</div>
+            <div className="picker-wheel-items">
+              {batches.map((b) => (
+                <button
+                  key={b}
+                  type="button"
+                  className={`picker-wheel-item${selectedBatch === b ? ' selected' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSelectBatch(b);
+                  }}
+                >
+                  {b}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Group Column */}
+          <div
+            className={`picker-wheel-col${activeColumn === 'group' ? ' col-active' : ''}`}
+            onClick={() => setActiveColumn('group')}
+          >
+            <div className="picker-wheel-label">Group</div>
+            <div className="picker-wheel-items">
+              {currentGroups.map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  className={`picker-wheel-item${selectedGroupLetter === g ? ' selected' : ''}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSelectGroup(g);
+                  }}
+                >
+                  Group {g}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Term follows batch */}
+        <div className="picker-term-note">
+          Batch {selectedBatch} · <strong>Term {termNum}</strong>
+        </div>
+
+        <div className="group-picker-actions">
+          <button type="button" className="btn-picker-cancel" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="btn-picker-save"
+            onClick={() => onSave(selectedBatch, selectedGroupLetter)}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MyGroupScreen() {
+  const { user, updateSettings } = useAuth();
   const navigate = useNavigate();
   const weekDays = getCurrentWeekDays();
   const todayStr = getTodayStr();
   const tomorrowStr = getTomorrowStr();
 
-  const [batchesAndGroups, setBatchesAndGroups] = useState([]);
-  const [batch, setBatch] = useState(() => parseInt(localStorage.getItem('freeroom_student_batch') || '2029', 10));
-  const [group, setGroup] = useState(() => localStorage.getItem('freeroom_student_group') || 'Group A');
+  const savedBatchRaw = localStorage.getItem('freeroom_student_batch');
+  const savedGroupRaw = localStorage.getItem('freeroom_student_group');
+
+  // PRD v6 Section 3: Check if valid batch and group are present in local storage
+  const hasValidSavedChoice = (() => {
+    if (!savedBatchRaw || !savedGroupRaw) return false;
+    const b = parseInt(savedBatchRaw, 10);
+    if (!BATCH_LIST.includes(b)) return false;
+    const letter = savedGroupRaw.replace(/^Group\s*/i, '').trim();
+    const validGroups = BATCH_CONFIG[b]?.groups || [];
+    return validGroups.includes(letter);
+  })();
+
+  const [batch, setBatch] = useState(() => {
+    if (savedBatchRaw) {
+      const b = parseInt(savedBatchRaw, 10);
+      if (BATCH_LIST.includes(b)) return b;
+    }
+    return 2029;
+  });
+  const [group, setGroup] = useState(() => savedGroupRaw || 'Group A');
+  const [hasPicked, setHasPicked] = useState(hasValidSavedChoice);
+  const [showPicker, setShowPicker] = useState(!hasValidSavedChoice);
   // Default to next day as requested
   const [selectedDay, setSelectedDay] = useState(tomorrowStr);
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  const groupLetter = group.replace(/^Group\s*/i, '').trim() || 'A';
+  const termNum = BATCH_CONFIG[batch]?.term || 5;
+
+  // PRD v6 Section 3: On sign-in, if account already has settings, account's settings win
   useEffect(() => {
-    roomsAPI.getBatchesAndGroups()
-      .then((res) => setBatchesAndGroups(res.data.batches || []))
-      .catch(console.error);
-  }, []);
+    if (user?.settings?.batch && user?.settings?.group) {
+      const b = user.settings.batch;
+      const g = user.settings.group;
+      if (BATCH_LIST.includes(b)) {
+        setBatch(b);
+        setGroup(g);
+        setHasPicked(true);
+        localStorage.setItem('freeroom_student_batch', String(b));
+        localStorage.setItem('freeroom_student_group', g);
+      }
+    }
+  }, [user]);
 
-  const availableGroups = (() => {
-    const b = batchesAndGroups.find((b) => b.batchYear === batch);
-    return b?.groups?.length ? b.groups : ['Group A', 'Group B', 'Group C'];
-  })();
+  // Auto-heal invalid group if loaded from previous mismatched state (e.g. 2028 with Group C)
+  useEffect(() => {
+    if (!hasPicked) return;
+    const validGroups = BATCH_CONFIG[batch]?.groups || ['A'];
+    if (!validGroups.includes(groupLetter)) {
+      const fixedGroup = `Group ${validGroups[0]}`;
+      setGroup(fixedGroup);
+      localStorage.setItem('freeroom_student_group', fixedGroup);
+      if (user && updateSettings) {
+        updateSettings({ batch, group: fixedGroup });
+      }
+    }
+  }, [batch, groupLetter, hasPicked, user, updateSettings]);
 
-  const cycleGroup = () => {
-    const idx = availableGroups.indexOf(group);
-    const next = availableGroups[(idx + 1) % availableGroups.length];
-    setGroup(next);
+  const handleSavePicker = (newBatch, newGroupLetter) => {
+    const validGroups = BATCH_CONFIG[newBatch]?.groups || ['A'];
+    const safeLetter = validGroups.includes(newGroupLetter) ? newGroupLetter : validGroups[0];
+    const fullGroup = `Group ${safeLetter}`;
+    setBatch(newBatch);
+    setGroup(fullGroup);
+    localStorage.setItem('freeroom_student_batch', String(newBatch));
+    localStorage.setItem('freeroom_student_group', fullGroup);
+    setHasPicked(true);
+    setShowPicker(false);
+
+    // PRD v6 Section 3: If signed in, sync to account across devices
+    if (user && updateSettings) {
+      updateSettings({ batch: newBatch, group: fullGroup });
+    }
   };
 
   const fetchSchedule = useCallback(async (d) => {
+    if (!hasPicked) return;
     setLoading(true);
     try {
       const res = await roomsAPI.getMyGroup({
@@ -1047,18 +1266,18 @@ function MyGroupScreen() {
         buildingId: 1,
       });
       setSchedule(res.data);
-      localStorage.setItem('freeroom_student_batch', String(batch));
-      localStorage.setItem('freeroom_student_group', group);
     } catch {
       toast.error('Failed to load group schedule');
     } finally {
       setLoading(false);
     }
-  }, [batch, group]);
+  }, [batch, group, hasPicked]);
 
   useEffect(() => {
-    fetchSchedule(selectedDay);
-  }, [fetchSchedule, selectedDay]);
+    if (hasPicked) {
+      fetchSchedule(selectedDay);
+    }
+  }, [fetchSchedule, selectedDay, hasPicked]);
 
   const dateHeading = (() => {
     if (!selectedDay) return '';
@@ -1078,10 +1297,10 @@ function MyGroupScreen() {
         <div className="mygroup-sidebar">
           <div className="group-info-card">
             <div>
-              <div className="group-name" id="group-title">{group}</div>
-              <div className="group-batch">Batch {batch} · Term 5</div>
+              <div className="group-name" id="group-title">Group {groupLetter}</div>
+              <div className="group-batch">Batch {batch} · Term {termNum}</div>
             </div>
-            <button className="change-btn" onClick={cycleGroup}>Change</button>
+            <button className="change-btn" id="btn-change-group" onClick={() => setShowPicker(true)}>Change</button>
           </div>
 
           <div className="days-grid" role="group" aria-label="Select Day">
@@ -1114,11 +1333,21 @@ function MyGroupScreen() {
           <div className="schedule-header-pc">
             <h2 className="schedule-day-title" id="schedule-date-heading">{dateHeading}</h2>
             <span className="schedule-summary">
-              {schedule?.classes?.length || 0} classes · {schedule?.gaps?.length || 0} gaps
+              {schedule?.classes?.length || 0} classes · {schedule?.gaps?.length || 0} {schedule?.gaps?.length === 1 ? 'gap' : 'gaps'}
             </span>
           </div>
 
-          {loading ? (
+          {!hasPicked ? (
+            <div style={{ textAlign: 'center', padding: '56px 20px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
+              <div style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>Select your batch & group</div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '13.5px', marginBottom: '20px', maxWidth: '380px', margin: '0 auto 20px' }}>
+                Please choose your batch and group to view your classes, timetable, and study gaps.
+              </p>
+              <button className="btn btn-primary" onClick={() => setShowPicker(true)}>
+                Choose Batch & Group
+              </button>
+            </div>
+          ) : loading ? (
             <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-secondary)' }}>
               Loading schedule…
             </div>
@@ -1200,6 +1429,16 @@ function MyGroupScreen() {
           )}
         </div>
       </div>
+
+      {showPicker && (
+        <GroupPickerModal
+          isOpen={showPicker}
+          onClose={() => setShowPicker(false)}
+          initialBatch={batch}
+          initialGroupLetter={groupLetter}
+          onSave={handleSavePicker}
+        />
+      )}
     </section>
   );
 }
