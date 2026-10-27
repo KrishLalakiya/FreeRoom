@@ -677,17 +677,16 @@ function FindRoomScreen() {
                 const isClosed = r.status === 'closed';
                 const submeta = r.name === '2B' ? 'or 2B1 and 2B2, 100 seats each' : null;
 
-                const freeUntilText = (() => {
-                  if (isClosed) return 'Closed for exams';
-                  if (!r.free_until) return 'Free for window';
+                const { freeUntilMain, nextEventTitle } = (() => {
+                  if (isClosed) return { freeUntilMain: 'Closed for exams', nextEventTitle: null };
+                  if (!r.free_until) return { freeUntilMain: 'Free for window', nextEventTitle: null };
                   const d = new Date(r.free_until);
-                  if (isNaN(d.getTime())) return 'Free for window';
+                  if (isNaN(d.getTime())) return { freeUntilMain: 'Free for window', nextEventTitle: null };
                   const timeStr = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
-                  if (timeStr === '10:00 pm' || d.getHours() >= 22) {
-                    return 'Free until 10:00 pm (all day)';
-                  }
-                  const nextInfo = r.next_event?.title ? ` · Next: ${r.next_event.title}` : '';
-                  return `Free until ${timeStr}${nextInfo}`;
+                  const main = (timeStr === '10:00 pm' || d.getHours() >= 22)
+                    ? 'Free until 10:00 pm (all day)'
+                    : `Free until ${timeStr}`;
+                  return { freeUntilMain: main, nextEventTitle: r.next_event?.title || null };
                 })();
 
                 return (
@@ -696,13 +695,16 @@ function FindRoomScreen() {
                     className="result-row-card"
                     onClick={() => navigate(`/room/${r.id}`)}
                   >
-                    <div>
+                    <div className="result-row-left">
                       <div className="room-code">{r.name}</div>
                       <div className="room-meta">{r.floor} floor · {r.capacity ?? '—'} seats</div>
                       {submeta && <div className="room-submeta">{submeta}</div>}
                     </div>
                     <div className="result-until-green" style={isClosed ? { color: 'var(--urgent-bg)' } : {}}>
-                      {freeUntilText}
+                      <span className="result-until-time">{freeUntilMain}</span>
+                      {nextEventTitle && (
+                        <span className="result-next-title"> · Next: {nextEventTitle}</span>
+                      )}
                     </div>
                   </div>
                 );

@@ -160,9 +160,9 @@ export default function DatePicker({ value, onChange, label, id = 'date-picker' 
   };
 
   return (
-    <div ref={containerRef} className="custom-datepicker-container" style={{ position: 'relative', width: '100%' }}>
+    <div ref={containerRef} className="custom-datepicker-container" style={{ position: 'relative', width: '100%', minWidth: 0 }}>
       {label && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px', flexWrap: 'wrap', gap: '4px' }}>
           <label className="form-label" htmlFor={id} style={{ margin: 0 }}>
             {label}
           </label>
@@ -181,7 +181,7 @@ export default function DatePicker({ value, onChange, label, id = 'date-picker' 
         aria-haspopup="dialog"
         aria-expanded={isOpen}
       >
-        <span style={{ display: 'flex', alignItems: 'center', gap: '9px' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0, overflow: 'hidden' }}>
           <svg
             width="16"
             height="16"
@@ -198,7 +198,7 @@ export default function DatePicker({ value, onChange, label, id = 'date-picker' 
             <line x1="8" y1="2" x2="8" y2="6" />
             <line x1="3" y1="10" x2="21" y2="10" />
           </svg>
-          <span className="custom-datepicker-value">{formattedDisplay}</span>
+          <span className="custom-datepicker-value" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formattedDisplay}</span>
         </span>
 
         <svg
@@ -222,7 +222,7 @@ export default function DatePicker({ value, onChange, label, id = 'date-picker' 
       </button>
 
       {/* Quick shortcuts under button */}
-      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+      <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap' }}>
         <button
           type="button"
           className={`filter-pill${value === todayStr ? ' active' : ''}`}
