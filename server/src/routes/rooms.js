@@ -174,14 +174,19 @@ router.get('/free-window', authenticate, async (req, res) => {
  */
 router.get('/:id/timeline', authenticate, async (req, res) => {
   try {
-    const roomId = parseInt(req.params.id, 10);
+    let roomId = parseInt(req.params.id, 10);
     const date = req.query.date || toDateStr();
 
     if (!Number.isInteger(roomId) || roomId < 1) {
-      return res.status(400).json({
-        error: 'Invalid room id',
-        message: 'Room id must be a positive integer.',
-      });
+      const roomLookup = await query('SELECT id FROM rooms WHERE UPPER(name) = UPPER($1)', [req.params.id]);
+      if (roomLookup.rows.length > 0) {
+        roomId = roomLookup.rows[0].id;
+      } else {
+        return res.status(404).json({
+          error: 'Room not found',
+          message: `No room named '${req.params.id}' exists.`,
+        });
+      }
     }
 
     if (!isValidDateStr(date)) {

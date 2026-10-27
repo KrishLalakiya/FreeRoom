@@ -640,6 +640,7 @@ async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now =
     no_class_day: noClassDay ? { reason: noClassDay.reason } : null,
     free_until: freeUntil,
     busy_blocks: busyBlocks.map((b) => ({
+      room_name: b.room_name || null,
       title: b.title,
       subject_name: b.subject_name || b.title,
       teacher: b.teacher,
@@ -683,6 +684,7 @@ async function getTimetableOccurrences(roomId, dateStr, dayOfWeek) {
       te.sheet_col,
       te.source_file,
       te.created_at,
+      rm.name         AS room_name,
       -- v2 linked fields
       s.name          AS subject_name,
       i.name          AS instructor_name,
@@ -698,6 +700,7 @@ async function getTimetableOccurrences(roomId, dateStr, dayOfWeek) {
         ARRAY[]::text[]
       ) AS groups_list
     FROM timetable_entries te
+    JOIN rooms                       rm ON rm.id = te.room_id
     LEFT JOIN terms                  t  ON t.id = te.term_id
     LEFT JOIN batches                b  ON b.id = t.batch_id
     LEFT JOIN subjects               s  ON s.id = te.subject_id
@@ -714,7 +717,7 @@ async function getTimetableOccurrences(roomId, dateStr, dayOfWeek) {
         (te.term_id IS NULL AND te.valid_from <= $3 AND te.valid_to >= $3)
       )
     GROUP BY
-      te.id, s.name, i.name, b.year, t.semester_number, t.term_number
+      te.id, rm.name, s.name, i.name, b.year, t.semester_number, t.term_number
   `,
     [roomId, dayOfWeek, dateStr]
   );
@@ -734,6 +737,7 @@ async function getTimetableOccurrences(roomId, dateStr, dayOfWeek) {
 
     return {
       timetable_entry_id: entry.id,
+      room_name: entry.room_name,
       title: subjectName,
       subject_name: subjectName,
       teacher: instructorName,

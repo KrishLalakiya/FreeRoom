@@ -394,7 +394,7 @@ function FreeNowScreen() {
                   <RoomCard
                     key={room.id}
                     room={room}
-                    onClick={(r) => navigate(`/room/${r.id}`)}
+                    onClick={(r) => navigate(`/find?mode=room&room=${encodeURIComponent(r.name || r.id)}`)}
                   />
                 ))}
               </div>
@@ -449,7 +449,7 @@ function FreeNowScreen() {
                       </div>
                       <button
                         className="room-pill-badge"
-                        onClick={() => navigate(`/room/${cls.room_id}`)}
+                        onClick={() => navigate(`/find?mode=room&room=${encodeURIComponent(cls.room_name || cls.room_id)}`)}
                         title={`View schedule for Room ${cls.room_name}`}
                       >
                         Room {cls.room_name} →
@@ -472,7 +472,7 @@ function FreeNowScreen() {
             <RoomCard
               key={room.id}
               room={room}
-              onClick={(r) => navigate(`/room/${r.id}`)}
+              onClick={(r) => navigate(`/find?mode=room&room=${encodeURIComponent(r.name || r.id)}`)}
             />
           ))}
         </div>
@@ -482,29 +482,102 @@ function FreeNowScreen() {
 }
 
 /* =========================================================
-   SCREEN 2: FIND A ROOM
+   SCREEN 2: FIND A ROOM (PRD v4: Free rooms & By room modes)
    ========================================================= */
+const ROOM_LIST = ['C', '1A', '1B', '2A', '2B', '2C'];
+
+const ROOM_META = {
+  'C': { floor: 'Ground', seats: 200, submeta: null },
+  '1A': { floor: '1st', seats: 200, submeta: null },
+  '1B': { floor: '1st', seats: 200, submeta: null },
+  '2A': { floor: '2nd', seats: 200, submeta: null },
+  '2B': { floor: '2nd', seats: 200, submeta: 'or 2B1 and 2B2, 100 seats each' },
+  '2C': { floor: '2nd', seats: 200, submeta: null },
+};
+
+const TIME_OPTIONS = [
+  { value: '06:00', label: '6:00 am' },
+  { value: '07:00', label: '7:00 am' },
+  { value: '08:00', label: '8:00 am' },
+  { value: '08:30', label: '8:30 am' },
+  { value: '09:00', label: '9:00 am' },
+  { value: '09:30', label: '9:30 am' },
+  { value: '10:00', label: '10:00 am' },
+  { value: '10:30', label: '10:30 am' },
+  { value: '11:00', label: '11:00 am' },
+  { value: '11:30', label: '11:30 am' },
+  { value: '12:00', label: '12:00 pm' },
+  { value: '12:30', label: '12:30 pm' },
+  { value: '13:00', label: '1:00 pm' },
+  { value: '13:30', label: '1:30 pm' },
+  { value: '14:00', label: '2:00 pm' },
+  { value: '14:30', label: '2:30 pm' },
+  { value: '15:00', label: '3:00 pm' },
+  { value: '15:30', label: '3:30 pm' },
+  { value: '16:00', label: '4:00 pm' },
+  { value: '16:30', label: '4:30 pm' },
+  { value: '17:00', label: '5:00 pm' },
+  { value: '17:30', label: '5:30 pm' },
+  { value: '18:00', label: '6:00 pm' },
+  { value: '18:30', label: '6:30 pm' },
+  { value: '19:00', label: '7:00 pm' },
+  { value: '19:30', label: '7:30 pm' },
+  { value: '20:00', label: '8:00 pm' },
+  { value: '20:30', label: '8:30 pm' },
+  { value: '21:00', label: '9:00 pm' },
+  { value: '22:00', label: '10:00 pm' },
+];
+
+function formatTimeFromDate(d) {
+  if (!d || isNaN(d.getTime())) return '';
+  return d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
+}
+
 function FindRoomScreen() {
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const todayStr = getTodayStr();
+  const [searchParams, setSearchParams] = useSearchParams();
   const tomorrowStr = getTomorrowStr();
 
-  // Remember last searched date, time, and floor across reloads
+  // Mode: 'free' | 'room'
+  const mode = searchParams.get('mode') === 'room' ? 'room' : 'free';
+  const paramRoom = searchParams.get('room');
+
+  // Shared date across both modes (defaults to tomorrow)
   const [date, setDate] = useState(() => {
     return searchParams.get('date') || localStorage.getItem('freeroom_find_date') || tomorrowStr;
   });
+
+  // Free rooms mode: From / To / Floor
   const [fromTime, setFromTime] = useState(() => {
-    return searchParams.get('from') || localStorage.getItem('freeroom_find_from') || '08:00';
+    return searchParams.get('from') || localStorage.getItem('freeroom_find_from') || '06:00';
   });
   const [toTime, setToTime] = useState(() => {
-    return searchParams.get('to') || localStorage.getItem('freeroom_find_to') || '09:00';
+    return searchParams.get('to') || localStorage.getItem('freeroom_find_to') || '22:00';
   });
   const [floor, setFloor] = useState(() => {
     return searchParams.get('floor') || localStorage.getItem('freeroom_find_floor') || 'all';
   });
 
-  // Persist selections whenever they change
+  // Free rooms results
+  const [rooms, setRooms] = useState([]);
+  const [closedRooms, setClosedRooms] = useState([]);
+  const [searchReason, setSearchReason] = useState(null);
+  const [loadingFree, setLoadingFree] = useState(false);
+
+  // By room mode: selected room & timeline
+  const [selectedRoom, setSelectedRoom] = useState(() => {
+    return paramRoom && ROOM_LIST.includes(paramRoom) ? paramRoom : 'C';
+  });
+  const [timelineData, setTimelineData] = useState(null);
+  const [loadingTimeline, setLoadingTimeline] = useState(false);
+
+  // Sync selectedRoom if param changes
+  useEffect(() => {
+    if (paramRoom && ROOM_LIST.includes(paramRoom)) {
+      setSelectedRoom(paramRoom);
+    }
+  }, [paramRoom]);
+
+  // Persist selections
   useEffect(() => {
     if (date) localStorage.setItem('freeroom_find_date', date);
     if (fromTime) localStorage.setItem('freeroom_find_from', fromTime);
@@ -512,39 +585,34 @@ function FindRoomScreen() {
     if (floor) localStorage.setItem('freeroom_find_floor', floor);
   }, [date, fromTime, toTime, floor]);
 
-  const [rooms, setRooms] = useState([]);
-  const [closedRooms, setClosedRooms] = useState([]);
-  const [searchReason, setSearchReason] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
+  // Mode switcher handler
+  const handleSetMode = (newMode) => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (newMode === 'room') {
+      nextParams.set('mode', 'room');
+      nextParams.set('room', selectedRoom || 'C');
+    } else {
+      nextParams.delete('mode');
+      nextParams.delete('room');
+    }
+    setSearchParams(nextParams);
+  };
 
-  const TIME_OPTIONS = [
-    { value: '08:00', label: '8:00 am' },
-    { value: '09:00', label: '9:00 am' },
-    { value: '10:00', label: '10:00 am' },
-    { value: '11:00', label: '11:00 am' },
-    { value: '12:00', label: '12:00 pm' },
-    { value: '13:00', label: '1:00 pm' },
-    { value: '14:00', label: '2:00 pm' },
-    { value: '15:00', label: '3:00 pm' },
-    { value: '16:00', label: '4:00 pm' },
-    { value: '17:00', label: '5:00 pm' },
-    { value: '17:30', label: '5:30 pm' },
-    { value: '18:00', label: '6:00 pm' },
-    { value: '18:30', label: '6:30 pm' },
-    { value: '19:00', label: '7:00 pm' },
-    { value: '19:30', label: '7:30 pm' },
-    { value: '20:00', label: '8:00 pm' },
-    { value: '21:00', label: '9:00 pm' },
-    { value: '22:00', label: '10:00 pm' },
-  ];
+  const handleSelectRoom = (roomName) => {
+    setSelectedRoom(roomName);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('mode', 'room');
+    nextParams.set('room', roomName);
+    setSearchParams(nextParams);
+  };
 
-  const performSearch = useCallback(async () => {
+  // Perform search for Free rooms mode
+  const fetchFreeRooms = useCallback(async () => {
     if (fromTime >= toTime) {
       toast.error('Start time must be earlier than end time');
       return;
     }
-    setLoading(true);
+    setLoadingFree(true);
     try {
       const params = { buildingId: 1, date, startTime: fromTime, endTime: toTime };
       if (floor !== 'all') params.floor = floor;
@@ -552,166 +620,360 @@ function FindRoomScreen() {
       setRooms(res.data.rooms || []);
       setClosedRooms(res.data.closed_rooms || []);
       setSearchReason(res.data.reason || null);
-      setSearched(true);
     } catch (err) {
       toast.error(err.response?.data?.message || 'Search failed');
     } finally {
-      setLoading(false);
+      setLoadingFree(false);
     }
   }, [date, fromTime, toTime, floor]);
 
   useEffect(() => {
-    performSearch();
-  }, [performSearch]);
+    if (mode === 'free') {
+      fetchFreeRooms();
+    }
+  }, [mode, fetchFreeRooms]);
 
+  // Fetch timeline for By room mode
+  const fetchTimeline = useCallback(async () => {
+    setLoadingTimeline(true);
+    try {
+      const res = await roomsAPI.getTimeline(selectedRoom, date);
+      setTimelineData(res.data);
+    } catch (err) {
+      toast.error(err.response?.data?.message || `Failed to load schedule for Room ${selectedRoom}`);
+    } finally {
+      setLoadingTimeline(false);
+    }
+  }, [selectedRoom, date]);
+
+  useEffect(() => {
+    if (mode === 'room') {
+      fetchTimeline();
+    }
+  }, [mode, fetchTimeline]);
+
+  // All free rooms combined
   const allRooms = [...rooms, ...closedRooms];
 
-  // Window duration in hours
+  // Duration in hours
   const [fh, fm] = fromTime.split(':').map(Number);
   const [th, tm] = toTime.split(':').map(Number);
   const diffHours = ((th * 60 + tm) - (fh * 60 + fm)) / 60;
+  const isAllDayWindow = fromTime === '06:00' && toTime === '22:00';
+
+  // Room meta for selected room in By room mode
+  const currentRoomMeta = ROOM_META[selectedRoom] || { floor: '2nd', seats: 200, submeta: null };
+
+  // Build By room timeline slots in chronological order
+  const timelineSlots = (() => {
+    if (!timelineData) return [];
+    const slots = [];
+
+    // Full-day closure
+    if (timelineData.status === 'closed' && (!timelineData.busy_blocks || timelineData.busy_blocks.length === 0)) {
+      return [{ type: 'closure', timeRange: '6:00 am – 10:00 pm' }];
+    }
+
+    // Free intervals
+    (timelineData.free_intervals || []).forEach((fi) => {
+      const s = new Date(fi.start);
+      const e = new Date(fi.end);
+      if (isNaN(s.getTime()) || isNaN(e.getTime())) return;
+      slots.push({
+        type: 'free',
+        startMs: s.getTime(),
+        endMs: e.getTime(),
+        timeRange: `${formatTimeFromDate(s)} – ${formatTimeFromDate(e)}`,
+      });
+    });
+
+    // Busy blocks
+    (timelineData.busy_blocks || []).forEach((bb) => {
+      const s = new Date(bb.start);
+      const e = new Date(bb.end);
+      if (isNaN(s.getTime()) || isNaN(e.getTime())) return;
+
+      if (bb.is_closure) {
+        slots.push({
+          type: 'closure',
+          startMs: s.getTime(),
+          endMs: e.getTime(),
+          timeRange: `${formatTimeFromDate(s)} – ${formatTimeFromDate(e)}`,
+        });
+        return;
+      }
+
+      const batch = bb.batch_year ? `Batch ${bb.batch_year}` : 'Batch 2029';
+      const group = bb.group || (bb.groups_list && bb.groups_list[0]) || '';
+      const subject = bb.subject_name || bb.title || '';
+      const teacher = bb.instructor_name || bb.teacher || '';
+      const isLab = (bb.entry_type || '').toLowerCase() === 'lab' || subject.toLowerCase().includes('lab');
+
+      let prefix = '';
+      if (selectedRoom === '2B' && bb.room_name && (bb.room_name === '2B1' || bb.room_name === '2B2')) {
+        prefix = `${bb.room_name} · `;
+      }
+
+      const lineText = `${prefix}${[batch, group, subject, teacher].filter(Boolean).join(' · ')}`;
+
+      slots.push({
+        type: 'busy',
+        startMs: s.getTime(),
+        endMs: e.getTime(),
+        timeRange: `${formatTimeFromDate(s)} – ${formatTimeFromDate(e)}`,
+        what: lineText,
+        isLab,
+      });
+    });
+
+    slots.sort((a, b) => a.startMs - b.startMs);
+    return slots;
+  })();
 
   return (
     <section id="screen-findroom" className="screen active">
-      <div className="findroom-layout">
-        {/* Left Sidebar / Top Mobile Controls */}
-        <div className="findroom-sidebar">
-          <h1 className="page-title">Find a room</h1>
+      <h1 className="page-title" style={{ marginBottom: '14px' }}>Find a room</h1>
 
-          <div className="form-group">
-            <DatePicker
-              value={date}
-              onChange={setDate}
-              label="Date"
-              id="find-date"
-            />
-          </div>
+      {/* Mode Switch: Free rooms / By room */}
+      <div className="fr-seg" role="tablist" aria-label="Find a room view">
+        <button
+          type="button"
+          role="tab"
+          className={mode === 'free' ? 'active' : ''}
+          aria-selected={mode === 'free'}
+          onClick={() => handleSetMode('free')}
+        >
+          Free rooms
+        </button>
+        <button
+          type="button"
+          role="tab"
+          className={mode === 'room' ? 'active' : ''}
+          aria-selected={mode === 'room'}
+          onClick={() => handleSetMode('room')}
+        >
+          By room
+        </button>
+      </div>
 
-          <div className="form-row-2">
+      <div className="fr-split">
+        {/* Left Card / Panel: Date & Filters */}
+        <aside className="fr-card fr-panel">
+          {/* Shared Date Field */}
+          <DatePicker
+            value={date}
+            onChange={setDate}
+            variant="fr-card"
+            id="find-date"
+          />
+
+          {mode === 'free' ? (
             <div>
-              <label className="form-label" htmlFor="find-from">From</label>
-              <select
-                id="find-from"
-                className="select-box"
-                value={fromTime}
-                onChange={(e) => setFromTime(e.target.value)}
-              >
-                {TIME_OPTIONS.map((t) => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="form-label" htmlFor="find-to">To</label>
-              <select
-                id="find-to"
-                className="select-box"
-                value={toTime}
-                onChange={(e) => setToTime(e.target.value)}
-              >
-                {TIME_OPTIONS.map((t) => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Floor</label>
-            <div className="floor-pills">
-              <button
-                className={`floor-pill${floor === 'all' ? ' active' : ''}`}
-                onClick={() => setFloor('all')}
-              >
-                Any floor
-              </button>
-              <button
-                className={`floor-pill${floor === 'Ground' ? ' active' : ''}`}
-                onClick={() => setFloor('Ground')}
-              >
-                Ground
-              </button>
-              <button
-                className={`floor-pill${floor === '1st' ? ' active' : ''}`}
-                onClick={() => setFloor('1st')}
-              >
-                1st
-              </button>
-              <button
-                className={`floor-pill${floor === '2nd' ? ' active' : ''}`}
-                onClick={() => setFloor('2nd')}
-              >
-                2nd
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Results List */}
-        <div className="findroom-results">
-          <div className="results-header">
-            <span id="findroom-count">{allRooms.length} {allRooms.length === 1 ? 'room' : 'rooms'} free</span>
-            <span>
-              {formatTime12(fromTime)} – {formatTime12(toTime)} · {diffHours} h
-            </span>
-          </div>
-
-          {loading ? (
-            <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-secondary)' }}>
-              Checking room schedules…
-            </div>
-          ) : allRooms.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
-              <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
-                {searchReason || 'No rooms free for this window'}
+              {/* From / To row */}
+              <div className="fr-time-row">
+                <div className="fr-time-btn">
+                  <span className="fr-time-label">From</span>
+                  <span className="fr-time-val">{formatTime12(fromTime)}</span>
+                  <select
+                    className="fr-time-select"
+                    value={fromTime}
+                    onChange={(e) => setFromTime(e.target.value)}
+                    aria-label="From time"
+                  >
+                    {TIME_OPTIONS.map((t) => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="fr-time-btn">
+                  <span className="fr-time-label">To</span>
+                  <span className="fr-time-val">{formatTime12(toTime)}</span>
+                  <select
+                    className="fr-time-select"
+                    value={toTime}
+                    onChange={(e) => setToTime(e.target.value)}
+                    aria-label="To time"
+                  >
+                    {TIME_OPTIONS.map((t) => (
+                      <option key={t.value} value={t.value}>{t.label}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-                {searchReason?.includes('academic term')
-                  ? 'No classes are scheduled outside term dates. Classrooms are generally available for open study.'
-                  : 'Try selecting a different time window or date.'}
-              </p>
+
+              {/* Floor Chips */}
+              <div className="fr-panel-block">
+                <div className="fr-panel-label">Floor</div>
+                <div className="fr-chip-row">
+                  {[
+                    { id: 'all', label: 'Any floor' },
+                    { id: 'Ground', label: 'Ground' },
+                    { id: '1st', label: '1st' },
+                    { id: '2nd', label: '2nd' },
+                  ].map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      className="fr-chip"
+                      aria-pressed={floor === f.id}
+                      onClick={() => setFloor(f.id)}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           ) : (
-            <div className="results-list" id="findroom-list">
-              {allRooms.map((r) => {
-                const isClosed = r.status === 'closed';
-                const submeta = r.name === '2B' ? 'or 2B1 and 2B2, 100 seats each' : null;
-
-                const { freeUntilMain, nextEventTitle } = (() => {
-                  if (isClosed) return { freeUntilMain: 'Closed for exams', nextEventTitle: null };
-                  if (!r.free_until) return { freeUntilMain: 'Free for window', nextEventTitle: null };
-                  const d = new Date(r.free_until);
-                  if (isNaN(d.getTime())) return { freeUntilMain: 'Free for window', nextEventTitle: null };
-                  const timeStr = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase();
-                  const main = (timeStr === '10:00 pm' || d.getHours() >= 22)
-                    ? 'Free until 10:00 pm (all day)'
-                    : `Free until ${timeStr}`;
-                  return { freeUntilMain: main, nextEventTitle: r.next_event?.title || null };
-                })();
-
-                return (
-                  <div
-                    key={r.id}
-                    className="result-row-card"
-                    onClick={() => navigate(`/room/${r.id}`)}
+            /* By room mode room chips */
+            <div className="fr-panel-block">
+              <div className="fr-panel-label">Room</div>
+              <div className="fr-chip-row" id="room-chips">
+                {ROOM_LIST.map((rName) => (
+                  <button
+                    key={rName}
+                    type="button"
+                    className="fr-chip"
+                    aria-pressed={selectedRoom === rName}
+                    onClick={() => handleSelectRoom(rName)}
                   >
-                    <div className="result-row-left">
-                      <div className="room-code">{r.name}</div>
-                      <div className="room-meta">{r.floor} floor · {r.capacity ?? '—'} seats</div>
-                      {submeta && <div className="room-submeta">{submeta}</div>}
-                    </div>
-                    <div className="result-until-green" style={isClosed ? { color: 'var(--urgent-bg)' } : {}}>
-                      <span className="result-until-time">{freeUntilMain}</span>
-                      {nextEventTitle && (
-                        <span className="result-next-title"> · Next: {nextEventTitle}</span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                    {rName}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
-        </div>
+        </aside>
+
+        {/* Right Content Pane */}
+        <section className="fr-content-pane">
+          {mode === 'free' ? (
+            <div>
+              <div className="fr-section-head">
+                <span className="fr-section-title">
+                  {allRooms.length} {allRooms.length === 1 ? 'room' : 'rooms'} free
+                </span>
+                <span className="fr-meta">
+                  {formatTime12(fromTime)} – {formatTime12(toTime)}
+                  {!isAllDayWindow && diffHours > 0 && diffHours < 16 ? ` · ${diffHours} h` : ''}
+                </span>
+              </div>
+
+              {loadingFree ? (
+                <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-secondary)' }}>
+                  Checking classroom availability…
+                </div>
+              ) : allRooms.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
+                    {searchReason || 'No rooms free for this window'}
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                    Try selecting a different time window or date.
+                  </p>
+                </div>
+              ) : (
+                <div className="fr-results" id="findroom-list">
+                  {allRooms.map((r) => {
+                    const isClosed = r.status === 'closed';
+                    const submeta = r.name === '2B' ? 'or 2B1 and 2B2, 100 seats each' : null;
+                    const untilText = (() => {
+                      if (isClosed) return 'Closed for exams';
+                      if (!r.free_until) return 'until 10:00 pm';
+                      const d = new Date(r.free_until);
+                      if (isNaN(d.getTime())) return 'until 10:00 pm';
+                      const hr = d.getHours();
+                      const min = d.getMinutes();
+                      if (hr >= 22 || (hr === 21 && min > 50)) return 'until 10:00 pm';
+                      return `until ${d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+                    })();
+
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        className="fr-result"
+                        onClick={() => handleSelectRoom(r.name)}
+                      >
+                        <span className="fr-result-info">
+                          <span className="fr-room-name">{r.name}</span>
+                          <span className="fr-room-sub">{r.floor} · {r.capacity || 200} seats</span>
+                          {submeta && <span className="fr-room-submeta">{submeta}</span>}
+                        </span>
+                        <span className="fr-room-until" style={isClosed ? { color: 'var(--urgent-bg)' } : {}}>
+                          {untilText}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ) : (
+            /* By room mode view */
+            <div>
+              <div className="fr-room-head">
+                <span className="fr-section-title" id="room-title">{selectedRoom}</span>
+                <span className="fr-meta" id="room-floor">
+                  {currentRoomMeta.floor} · {currentRoomMeta.seats} seats
+                </span>
+                {currentRoomMeta.submeta && (
+                  <span className="fr-submeta">{currentRoomMeta.submeta}</span>
+                )}
+              </div>
+
+              {loadingTimeline ? (
+                <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-secondary)' }}>
+                  Loading schedule for Room {selectedRoom}…
+                </div>
+              ) : timelineSlots.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
+                    No timetable scheduled for this date
+                  </div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+                    Room {selectedRoom} is free for open study.
+                  </p>
+                </div>
+              ) : (
+                <div className="fr-slots">
+                  {timelineSlots.map((slot, idx) => {
+                    if (slot.type === 'free') {
+                      return (
+                        <div key={idx} className="fr-slot fr-slot--free">
+                          <div className="fr-slot-top">
+                            <span>{slot.timeRange}</span>
+                            <span className="fr-tag-free">Free</span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    if (slot.type === 'closure') {
+                      return (
+                        <div key={idx} className="fr-slot fr-slot--closed">
+                          <div className="fr-slot-top">
+                            <span>{slot.timeRange ? `${slot.timeRange} · ` : ''}Closed for exams</span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={idx} className="fr-slot">
+                        <div className="fr-slot-top">
+                          <span>{slot.timeRange}</span>
+                        </div>
+                        <div className="fr-slot-what">
+                          {slot.what}
+                          {slot.isLab && <span className="fr-muted"> · Lab</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
       </div>
     </section>
   );
@@ -720,6 +982,30 @@ function FindRoomScreen() {
 /* =========================================================
    SCREEN 3: MY GROUP
    ========================================================= */
+function filterGapRooms(roomsList) {
+  if (!roomsList || roomsList.length === 0) return [];
+  const names = new Set(roomsList.map((r) => r.name));
+  const has2B = names.has('2B');
+  const has2B1 = names.has('2B1');
+  const has2B2 = names.has('2B2');
+
+  // Rule: show 2B only when 2B1 and 2B2 are both free.
+  // Otherwise show the free halves as 2B1 and/or 2B2, and do not show 2B.
+  if (has2B1 && has2B2) {
+    const withoutHalves = roomsList.filter((r) => r.name !== '2B1' && r.name !== '2B2');
+    if (!has2B) {
+      withoutHalves.push({ id: '2B', name: '2B', floor: '2nd' });
+    }
+    return withoutHalves;
+  }
+
+  if (has2B1 || has2B2) {
+    return roomsList.filter((r) => r.name !== '2B');
+  }
+
+  return roomsList;
+}
+
 function MyGroupScreen() {
   const navigate = useNavigate();
   const weekDays = getCurrentWeekDays();
@@ -815,8 +1101,10 @@ function MyGroupScreen() {
             <DatePicker
               value={selectedDay}
               onChange={setSelectedDay}
-              label="Pick any date"
+              label="Other date…"
               id="mygroup-date"
+              hideQuickPills={true}
+              hideDefaultLabel={true}
             />
           </div>
         </div>
@@ -855,6 +1143,7 @@ function MyGroupScreen() {
                 const isLab = (cls.entry_type || '').toLowerCase() === 'lab';
 
                 const gapAfter = schedule.gaps?.find((g) => g.start === cls.end_time);
+                const visibleGapRooms = gapAfter?.free_rooms ? filterGapRooms(gapAfter.free_rooms) : [];
 
                 return (
                   <div key={cls.id || idx}>
@@ -871,7 +1160,15 @@ function MyGroupScreen() {
                           {cls.instructor ? `${cls.instructor} · ` : ''}{cls.floor} floor
                         </div>
                       </div>
-                      <span className="room-pill-badge">{cls.room_name}</span>
+                      <button
+                        type="button"
+                        className="room-pill-badge"
+                        onClick={() => navigate(`/find?mode=room&room=${encodeURIComponent(cls.room_name)}`)}
+                        style={{ cursor: 'pointer', border: 'none' }}
+                        title={`View schedule for Room ${cls.room_name}`}
+                      >
+                        {cls.room_name}
+                      </button>
                     </div>
 
                     {/* Gap between classes */}
@@ -880,13 +1177,13 @@ function MyGroupScreen() {
                         <div className="gap-title">
                           {gapAfter.duration_minutes} min free · {formatTime12(gapAfter.start)} – {formatTime12(gapAfter.end)}
                         </div>
-                        {gapAfter.free_rooms?.length > 0 && (
+                        {visibleGapRooms.length > 0 && (
                           <div className="gap-rooms">
-                            {gapAfter.free_rooms.map((r) => (
+                            {visibleGapRooms.map((r) => (
                               <button
-                                key={r.id}
+                                key={r.id || r.name}
                                 className="gap-room-pill"
-                                onClick={() => navigate(`/room/${r.id}`)}
+                                onClick={() => navigate(`/find?mode=room&room=${encodeURIComponent(r.name)}`)}
                                 title={`${r.name} · ${r.floor} floor`}
                               >
                                 {r.name}

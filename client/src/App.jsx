@@ -1,13 +1,16 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
-import RoomDetailPage from './pages/RoomDetailPage';
-import RoomsPage from './pages/RoomsPage';
 import AdminPage from './pages/AdminPage';
 import './index.css';
+
+function RoomRedirect() {
+  const { id } = useParams();
+  return <Navigate to={`/find?mode=room&room=${id}`} replace />;
+}
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -106,7 +109,7 @@ function AppRoutes() {
         path="/rooms"
         element={
           <ProtectedRoute>
-            <RoomsPage />
+            <Navigate to="/find?mode=room" replace />
           </ProtectedRoute>
         }
       />
@@ -114,7 +117,7 @@ function AppRoutes() {
         path="/room/:id"
         element={
           <ProtectedRoute>
-            <RoomDetailPage />
+            <RoomRedirect />
           </ProtectedRoute>
         }
       />

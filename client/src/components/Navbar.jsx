@@ -44,6 +44,17 @@ function IconGrid() {
   );
 }
 
+function IconUsers() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="9" cy="8" r="3.2" />
+      <path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" />
+      <circle cx="17" cy="9" r="2.6" />
+      <path d="M16.5 14c2.7.2 4.5 2 4.5 5" />
+    </svg>
+  );
+}
+
 function IconCog() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
@@ -157,9 +168,6 @@ export default function Navbar() {
             </Link>
             <Link to="/my-group" className={`pc-nav-item${isGroupActive ? ' active' : ''}`}>
               My group
-            </Link>
-            <Link to="/rooms" className={`pc-nav-item${isRoomsActive ? ' active' : ''}`}>
-              Rooms
             </Link>
             {isAdmin && (
               <Link to="/admin" className={`pc-nav-item${isAdminActive ? ' active' : ''}`}>
@@ -396,16 +404,12 @@ export default function Navbar() {
           <span>Free now</span>
         </Link>
         <Link to="/find" className={`bottom-nav-item${isFindActive ? ' active' : ''}`}>
-          <IconSearch />
+          <IconCalendar />
           <span>Find a room</span>
         </Link>
         <Link to="/my-group" className={`bottom-nav-item${isGroupActive ? ' active' : ''}`}>
-          <IconCalendar />
+          <IconUsers />
           <span>My group</span>
-        </Link>
-        <Link to="/rooms" className={`bottom-nav-item${isRoomsActive ? ' active' : ''}`}>
-          <IconGrid />
-          <span>Rooms</span>
         </Link>
         {isAdmin && (
           <Link to="/admin" className={`bottom-nav-item${isAdminActive ? ' active' : ''}`}>
