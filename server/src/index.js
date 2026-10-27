@@ -30,15 +30,17 @@ const allowedOrigins = [
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
+    const cleanOrigin = origin.replace(/\/$/, '');
     if (
       process.env.NODE_ENV === 'development' ||
-      allowedOrigins.includes(origin) ||
-      origin.includes('localhost') ||
-      origin.includes('127.0.0.1')
+      allowedOrigins.some((o) => o && o.replace(/\/$/, '') === cleanOrigin) ||
+      cleanOrigin.includes('localhost') ||
+      cleanOrigin.includes('127.0.0.1') ||
+      cleanOrigin.endsWith('.vercel.app')
     ) {
       return callback(null, true);
     }
-    return callback(new Error('Not allowed by CORS'));
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
   },
   credentials: true,
 }));
