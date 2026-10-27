@@ -293,33 +293,114 @@ button, select, input {
 .header-right-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+
+/* Theme Toggle & PC Hover Tooltip */
+.theme-toggle-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .theme-quick-btn {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background-color: var(--bg-subtle);
-  border: 1px solid var(--border-control);
-  color: var(--text-primary);
-  font-size: 14px;
+  background-color: #f0f2f5;
+  border: none;
+  color: #1a1a19;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, transform 0.1s ease;
   user-select: none;
 }
 
 .theme-quick-btn:hover {
-  background-color: var(--bg-card);
-  border-color: var(--text-primary);
-  box-shadow: 0 0 0 3px rgba(26, 26, 25, 0.08);
+  background-color: #e4e7eb;
+}
+
+.theme-quick-btn svg {
+  width: 19px;
+  height: 19px;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .theme-quick-btn {
+  background-color: #484c54;
+  color: #ffffff;
 }
 
 [data-theme="dark"] .theme-quick-btn:hover {
-  box-shadow: 0 0 0 3px rgba(240, 246, 252, 0.12);
+  background-color: #525660;
+}
+
+[data-theme="darker"] .theme-quick-btn {
+  background-color: #232730;
+  color: #ffffff;
+}
+
+[data-theme="darker"] .theme-quick-btn:hover {
+  background-color: #2d323e;
+}
+
+/* Hover Tooltip (PC) */
+.theme-tooltip {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: #f0f2f5;
+  color: #1f2937;
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  padding: 8px 14px;
+  border-radius: 8px;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 120;
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+}
+
+.theme-tooltip.visible,
+.theme-toggle-wrap:hover .theme-tooltip,
+.theme-quick-btn:hover + .theme-tooltip,
+.theme-quick-btn:focus + .theme-tooltip,
+.theme-quick-btn:focus-visible + .theme-tooltip {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: translateX(-50%) translateY(0) !important;
+}
+
+[data-theme="dark"] .theme-tooltip {
+  background: #464a52;
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="darker"] .theme-tooltip {
+  background: #1c2028;
+  color: #f3f4f6;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+}
+
+@media (max-width: 768px) {
+  .theme-tooltip {
+    display: none !important;
+  }
 }
 
 /* Avatar Button & Account Dropdown */
@@ -328,24 +409,31 @@ button, select, input {
 }
 
 .avatar-btn {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
-  background-color: var(--bg-subtle);
-  border: 1px solid var(--border-control);
-  color: var(--text-primary);
-  font-weight: 600;
-  font-size: 13px;
+  background-color: #e5e7eb;
+  border: none;
+  color: #111827;
+  font-weight: 700;
+  font-size: 14.5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   cursor: pointer;
-  transition: box-shadow 0.15s ease;
+  transition: opacity 0.15s ease;
 }
 
 .avatar-btn:hover {
-  box-shadow: 0 0 0 3px rgba(26, 26, 25, 0.08);
+  opacity: 0.9;
+}
+
+[data-theme="dark"] .avatar-btn,
+[data-theme="darker"] .avatar-btn {
+  background-color: #e5e7eb;
+  color: #111827;
+  border: none;
 }
 
 .avatar-img {

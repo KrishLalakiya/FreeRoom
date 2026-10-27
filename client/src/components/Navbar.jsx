@@ -53,12 +53,59 @@ function IconCog() {
   );
 }
 
+function IconMoon({ className = '' }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+    </svg>
+  );
+}
+
+function IconSun({ className = '' }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="4.5" />
+      <line x1="12" y1="2" x2="12" y2="4.5" />
+      <line x1="12" y1="19.5" x2="12" y2="22" />
+      <line x1="4.22" y1="4.22" x2="6" y2="6" />
+      <line x1="18" y1="18" x2="19.78" y2="19.78" />
+      <line x1="2" y1="12" x2="4.5" y2="12" />
+      <line x1="19.5" y1="12" x2="22" y2="12" />
+      <line x1="4.22" y1="19.78" x2="6" y2="18" />
+      <line x1="18" y1="6" x2="19.78" y2="4.22" />
+    </svg>
+  );
+}
+
 export default function Navbar() {
   const { user, logout, isAdmin } = useAuth();
   const { theme, setTheme, toggleTheme, isDark } = useTheme();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+  const [themeTooltipOpen, setThemeTooltipOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [newName, setNewName] = useState('');
   const menuRef = useRef(null);
@@ -123,15 +170,28 @@ export default function Navbar() {
         </div>
 
         <div className="header-right-actions">
-          <button
-            type="button"
-            className="theme-quick-btn"
-            onClick={toggleTheme}
-            title={`Current theme: ${theme === 'darker' ? 'Darker' : (theme === 'dark' ? 'Dark' : 'Current')}`}
-            aria-label="Toggle theme"
+          <div
+            className="theme-toggle-wrap"
+            onMouseEnter={() => setThemeTooltipOpen(true)}
+            onMouseLeave={() => setThemeTooltipOpen(false)}
           >
-            {theme === 'darker' ? '🌑' : (theme === 'dark' ? '🌙' : '☀️')}
-          </button>
+            <button
+              type="button"
+              className="theme-quick-btn"
+              onClick={toggleTheme}
+              onFocus={() => setThemeTooltipOpen(true)}
+              onBlur={() => setThemeTooltipOpen(false)}
+              aria-label={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+              {isDark ? <IconSun /> : <IconMoon />}
+            </button>
+            <div
+              className={`theme-tooltip${themeTooltipOpen ? ' visible' : ''}`}
+              role="tooltip"
+            >
+              {isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            </div>
+          </div>
 
           <div className="avatar-wrap" ref={menuRef}>
             <button
