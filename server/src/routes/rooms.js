@@ -7,6 +7,7 @@ import {
   getNextDayTimetableData,
   apply2BRule,
   getAllRoomsAvailabilityForDate,
+  availabilityCache,
 } from '../services/availabilityEngine.js';
 import { calculateGapPlan } from '../services/roomChainingEngine.js';
 import { getSystemSettings } from '../services/systemSettings.js';
@@ -281,6 +282,12 @@ router.get('/buildings', optionalAuthenticate, async (req, res) => {
  */
 router.get('/batches-and-groups', optionalAuthenticate, async (req, res) => {
   try {
+    const targetDate = req.query.date && isValidDateStr(req.query.date) ? req.query.date : toDateStr();
+    const cacheKey = `batches_and_groups:${targetDate}`;
+    const cached = availabilityCache.get(cacheKey);
+    if (cached) {
+      return res.json(structuredClone(cached));
+    }
     const batchesRes = await query('SELECT id, year FROM batches ORDER BY year DESC');
     const groupsRes = await query('SELECT id, batch_id, name FROM groups ORDER BY name ASC');
 
@@ -307,7 +314,9 @@ router.get('/batches-and-groups', optionalAuthenticate, async (req, res) => {
       };
     });
 
-    res.json({ batches: result });
+    const responsePayload = { batches: result };
+    availabilityCache.set(cacheKey, responsePayload, 300000);
+    res.json(responsePayload);
   } catch (err) {
     console.error('Batches and groups error:', err);
     res.status(500).json({ error: 'Failed to fetch batches and groups' });
@@ -328,6 +337,12 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
 
     if (!isValidDateStr(date)) {
       return res.status(400).json({ error: 'Invalid date format' });
+    }
+
+    const cacheKey = `my_group:${buildingId}:${batchYear}:${groupName}:${date}`;
+    const cached = availabilityCache.get(cacheKey);
+    if (cached) {
+      return res.json(structuredClone(cached));
     }
 
     // 1. Find term covering this date for the given batch
@@ -527,7 +542,7 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
       }
     }
 
-    res.json({
+    const responsePayload = {
       status: 'ok',
       date,
       day_of_week: dayOfWeek,
@@ -544,7 +559,9 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
       classes: activeClasses,
       gaps_count: gaps.length,
       gaps,
-    });
+    };
+    availabilityCache.set(cacheKey, responsePayload);
+    res.json(responsePayload);
   } catch (err) {
     console.error('My group error:', err);
     res.status(500).json({ error: 'Failed to fetch my group schedule' });

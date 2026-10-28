@@ -206,10 +206,17 @@ function FreeNowScreen() {
     return () => clearInterval(id);
   }, [fetchRooms]);
 
+  const nextDayCacheRef = useRef({});
+
   const handleSelectDay = async (dateStr) => {
+    if (nextDayCacheRef.current[dateStr]) {
+      setNextDayData(nextDayCacheRef.current[dateStr]);
+      return;
+    }
     setLoadingNextDay(true);
     try {
       const res = await roomsAPI.getNextTimetable({ date: dateStr, buildingId: 1 });
+      nextDayCacheRef.current[dateStr] = res.data;
       setNextDayData(res.data);
     } catch {
       toast.error('Failed to load timetable for selected day');
@@ -1461,8 +1468,15 @@ function MyGroupScreen() {
     }
   };
 
+  const scheduleCacheRef = useRef({});
+
   const fetchSchedule = useCallback(async (d) => {
     if (!hasPicked) return;
+    const cacheKey = `${batch}-${group}-${d}`;
+    if (scheduleCacheRef.current[cacheKey]) {
+      setSchedule(scheduleCacheRef.current[cacheKey]);
+      return;
+    }
     setLoading(true);
     try {
       const res = await roomsAPI.getMyGroup({
@@ -1471,6 +1485,7 @@ function MyGroupScreen() {
         date: d,
         buildingId: 1,
       });
+      scheduleCacheRef.current[cacheKey] = res.data;
       setSchedule(res.data);
     } catch {
       toast.error('Failed to load group schedule');

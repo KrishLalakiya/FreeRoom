@@ -30,7 +30,12 @@ const BUFFER_MINUTES = parseInt(process.env.BUFFER_MINUTES || '0', 10);
 /**
  * Compute next day's full timetable and morning room availability.
  */
-export async function getNextDayTimetableData(buildingId, targetDate, targetDow, building, rooms) {
+export async function getNextDayTimetableData(buildingId, targetDate, targetDow, building, rooms, bypassCache = false) {
+  const cacheKey = `next_day_tt:${buildingId}:${targetDate}`;
+  if (!bypassCache) {
+    const cached = availabilityCache.get(cacheKey);
+    if (cached) return structuredClone(cached);
+  }
   const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const dayName = DAY_NAMES[targetDow];
 
@@ -144,7 +149,7 @@ export async function getNextDayTimetableData(buildingId, targetDate, targetDow,
       String(a.name).localeCompare(String(b.name))
   );
 
-  return {
+  const result = {
     date: targetDate,
     day_of_week: targetDow,
     day_name: dayName,
@@ -156,6 +161,10 @@ export async function getNextDayTimetableData(buildingId, targetDate, targetDow,
     rooms: apply2BRule(nextRooms),
     classes,
   };
+  if (!bypassCache) {
+    availabilityCache.set(cacheKey, result);
+  }
+  return result;
 }
 
 /**
@@ -1309,28 +1318,39 @@ async function getTimetableCoverage(buildingId) {
  * Get availability and free intervals in local time strings for all rooms in a building.
  * Used by Room Chaining Engine (PRD v8).
  */
-export async function getAllRoomsAvailabilityForDate(buildingId, dateStr) {
+export async function getAllRoomsAvailabilityForDate(buildingId, dateStr, bypassCache = false) {
+  const cacheKey = `all_rooms_avail:${buildingId}:${dateStr}`;
+  if (!bypassCache) {
+    const cached = availabilityCache.get(cacheKey);
+    if (cached) return structuredClone(cached);
+  }
+
   const rooms = await getRooms(buildingId);
   const building = await getBuilding(buildingId);
   if (!building) return [];
   const dayOfWeek = dayOfWeekForDateStr(dateStr);
 
-  const list = [];
-  for (const room of rooms) {
-    const availability = await computeRoomAvailability(room, dateStr, dayOfWeek, building);
-    list.push({
-      id: room.id,
-      name: room.name,
-      floor: room.floor,
-      capacity: room.capacity,
-      parent_room_id: room.parent_room_id,
-      status: availability.status,
-      free_intervals: (availability.free_intervals || []).map((iv) => ({
-        start: formatTimeInTz(iv.start),
-        end: formatTimeInTz(iv.end),
-      })),
-      busy_blocks: availability.busy_blocks,
-    });
+  const list = await Promise.all(
+    rooms.map(async (room) => {
+      const availability = await computeRoomAvailability(room, dateStr, dayOfWeek, building);
+      return {
+        id: room.id,
+        name: room.name,
+        floor: room.floor,
+        capacity: room.capacity,
+        parent_room_id: room.parent_room_id,
+        status: availability.status,
+        free_intervals: (availability.free_intervals || []).map((iv) => ({
+          start: formatTimeInTz(iv.start),
+          end: formatTimeInTz(iv.end),
+        })),
+        busy_blocks: availability.busy_blocks,
+      };
+    })
+  );
+
+  if (!bypassCache) {
+    availabilityCache.set(cacheKey, list);
   }
   return list;
 }
