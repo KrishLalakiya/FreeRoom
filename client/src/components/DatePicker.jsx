@@ -42,6 +42,7 @@ export default function DatePicker({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
+  const popupRef = useRef(null);
 
   const todayStr = getTodayStr();
   const tomorrowStr = getTomorrowStr();
@@ -104,6 +105,103 @@ export default function DatePicker({
       setViewMonth((m) => m + 1);
     }
   };
+
+  // Vertical touch swipe for month: swipe up -> next month, swipe down -> prev month
+  const monthTouchStartY = useRef(null);
+  const monthTouchStartX = useRef(null);
+  const monthTouchStartTime = useRef(null);
+  const lastMonthSwipeTime = useRef(0);
+
+  const handleMonthTouchStart = (e) => {
+    if (e.touches && e.touches[0]) {
+      monthTouchStartY.current = e.touches[0].clientY;
+      monthTouchStartX.current = e.touches[0].clientX;
+      monthTouchStartTime.current = Date.now();
+    }
+  };
+
+  const handleMonthTouchEnd = (e) => {
+    if (monthTouchStartY.current == null || monthTouchStartX.current == null) return;
+    const now = Date.now();
+    // Enforce cooldown so only a single month is swiped at a time (slow down single scroll)
+    if (now - lastMonthSwipeTime.current < 500) {
+      monthTouchStartY.current = null;
+      monthTouchStartX.current = null;
+      return;
+    }
+
+    const touchEndY = e.changedTouches[0].clientY;
+    const touchEndX = e.changedTouches[0].clientX;
+    const dy = touchEndY - monthTouchStartY.current;
+    const dx = touchEndX - monthTouchStartX.current;
+    const dt = now - (monthTouchStartTime.current || 0);
+
+    // Clear vertical swipe intent
+    if (Math.abs(dy) > Math.abs(dx) * 1.3 && (Math.abs(dy) > 35 || (Math.abs(dy) > 20 && dt < 250))) {
+      lastMonthSwipeTime.current = now;
+      if (dy < 0) {
+        // Swipe up -> next month
+        nextMonth();
+      } else {
+        // Swipe down -> prev month
+        prevMonth();
+      }
+    }
+
+    monthTouchStartY.current = null;
+    monthTouchStartX.current = null;
+    monthTouchStartTime.current = null;
+  };
+
+  // Mouse wheel scroll for month on PC: attach with { passive: false } so preventDefault() never throws passive listener violations
+  useEffect(() => {
+    const el = popupRef.current;
+    if (!el || !isOpen) return;
+
+    const onWheel = (e) => {
+      // Disable wheel scrolling on mobile / touch devices completely
+      const isTouchDevice =
+        typeof window !== 'undefined' &&
+        (window.matchMedia('(pointer: coarse)').matches ||
+         'ontouchstart' in window ||
+         navigator.maxTouchPoints > 0 ||
+         window.innerWidth <= 768);
+      if (isTouchDevice) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const now = Date.now();
+      // Enforce 650ms cooldown so at most 1 month step occurs per scroll gesture
+      if (now - lastWheelTime.current < 650) {
+        return;
+      }
+
+      wheelAccumulator.current += e.deltaY;
+
+      if (wheelTimeout.current) clearTimeout(wheelTimeout.current);
+      wheelTimeout.current = setTimeout(() => {
+        wheelAccumulator.current = 0;
+      }, 250);
+
+      if (wheelAccumulator.current > 75) {
+        // Scroll down -> prev month
+        lastWheelTime.current = now;
+        wheelAccumulator.current = 0;
+        prevMonth();
+      } else if (wheelAccumulator.current < -75) {
+        // Scroll up -> next month
+        lastWheelTime.current = now;
+        wheelAccumulator.current = 0;
+        nextMonth();
+      }
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+    };
+  }, [isOpen, viewMonth, viewYear]);
 
   // Build month calendar days
   const firstDow = new Date(viewYear, viewMonth, 1).getDay(); // 0 = Sun
@@ -287,9 +385,13 @@ export default function DatePicker({
       {/* Pop-up or Inline Calendar */}
       {isOpen && (
         <div
+          ref={popupRef}
           className={variant === 'fr-card' ? 'fr-date-inline-calendar' : 'custom-datepicker-popup'}
           role="dialog"
           aria-modal={variant !== 'fr-card'}
+          onTouchStart={handleMonthTouchStart}
+          onTouchEnd={handleMonthTouchEnd}
+          style={{ touchAction: 'none' }}
         >
           {/* Header Month / Year Navigation */}
           <div className="datepicker-header">
@@ -371,6 +473,9 @@ export default function DatePicker({
             })}
           </div>
 
+          <div style={{ textAlign: 'center', fontSize: '11px', color: 'var(--text-secondary)', padding: '4px 0 2px', userSelect: 'none', opacity: 0.8 }}>
+            ↕ Swipe or scroll to change month
+          </div>
           {/* Footer Actions */}
           <div className="datepicker-footer">
             <button

@@ -10,6 +10,8 @@ const isRemoteDb = process.env.DATABASE_URL && !process.env.DATABASE_URL.include
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: (process.env.NODE_ENV === 'production' || isRemoteDb) ? { rejectUnauthorized: false } : false,
+  connectionTimeoutMillis: 10000,
+  idleTimeoutMillis: 30000,
 });
 
 pool.on('connect', () => {
@@ -17,8 +19,8 @@ pool.on('connect', () => {
 });
 
 pool.on('error', (err) => {
-  console.error('Unexpected database error:', err);
-  process.exit(-1);
+  // PRD v7 Section 5 Item 6: Do not call process.exit(-1) on pool error; log and allow reconnect
+  console.error('Unexpected database pool error:', err.message || err);
 });
 
 export const query = (text, params) => pool.query(text, params);

@@ -256,7 +256,7 @@ export default function Navbar() {
                   <div className="account-preference-header">
                     <span className="account-preference-title">Theme preference</span>
                     <span className="account-preference-badge">
-                      {theme === 'darker' ? 'Darker' : (theme === 'dark' ? 'Dark' : 'Current')}
+                      {theme === 'dark' ? 'Dark' : 'Light'}
                     </span>
                   </div>
                   <div className="theme-toggle-pills" role="radiogroup" aria-label="Theme preference">
@@ -267,7 +267,7 @@ export default function Navbar() {
                       role="radio"
                       aria-checked={theme === 'light'}
                     >
-                      <span className="theme-icon">☀️</span> Current
+                      <span className="theme-icon">☀️</span> Light
                     </button>
                     <button
                       type="button"
@@ -277,15 +277,6 @@ export default function Navbar() {
                       aria-checked={theme === 'dark'}
                     >
                       <span className="theme-icon">🌙</span> Dark
-                    </button>
-                    <button
-                      type="button"
-                      className={`theme-pill-btn${theme === 'darker' ? ' active' : ''}`}
-                      onClick={() => setTheme('darker')}
-                      role="radio"
-                      aria-checked={theme === 'darker'}
-                    >
-                      <span className="theme-icon">🌑</span> Darker
                     </button>
                   </div>
                 </div>
@@ -356,38 +347,29 @@ export default function Navbar() {
               <div className="account-preference-header">
                 <span className="account-preference-title">Theme preference</span>
                 <span className="account-preference-badge">
-                  {theme === 'darker' ? 'Darker' : (theme === 'dark' ? 'Dark' : 'Current')}
+                  {theme === 'dark' ? 'Dark' : 'Light'}
                 </span>
               </div>
               <div className="theme-toggle-pills" role="radiogroup" aria-label="Theme preference">
-                <button
-                  type="button"
-                  className={`theme-pill-btn${theme === 'light' ? ' active' : ''}`}
-                  onClick={() => setTheme('light')}
-                  role="radio"
-                  aria-checked={theme === 'light'}
-                >
-                  <span className="theme-icon">☀️</span> Current
-                </button>
-                <button
-                  type="button"
-                  className={`theme-pill-btn${theme === 'dark' ? ' active' : ''}`}
-                  onClick={() => setTheme('dark')}
-                  role="radio"
-                  aria-checked={theme === 'dark'}
-                >
-                  <span className="theme-icon">🌙</span> Dark
-                </button>
-                <button
-                  type="button"
-                  className={`theme-pill-btn${theme === 'darker' ? ' active' : ''}`}
-                  onClick={() => setTheme('darker')}
-                  role="radio"
-                  aria-checked={theme === 'darker'}
-                >
-                  <span className="theme-icon">🌑</span> Darker
-                </button>
-              </div>
+                    <button
+                      type="button"
+                      className={`theme-pill-btn${theme === 'light' ? ' active' : ''}`}
+                      onClick={() => setTheme('light')}
+                      role="radio"
+                      aria-checked={theme === 'light'}
+                    >
+                      <span className="theme-icon">☀️</span> Light
+                    </button>
+                    <button
+                      type="button"
+                      className={`theme-pill-btn${theme === 'dark' ? ' active' : ''}`}
+                      onClick={() => setTheme('dark')}
+                      role="radio"
+                      aria-checked={theme === 'dark'}
+                    >
+                      <span className="theme-icon">🌙</span> Dark
+                    </button>
+                  </div>
             </div>
 
             <div className="account-divider" />

@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { HiChevronLeft, HiChevronRight, HiOutlineCalendar } from 'react-icons/hi';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { roomsAPI } from '../services/api';
 import Navbar from '../components/Navbar';
@@ -65,6 +66,32 @@ function formatLocalDateStr(d) {
   return `${y}-${m}-${day}`;
 }
 
+function getMondayOf(date) {
+  const d = new Date(date);
+  const dow = d.getDay(); // 0=Sun
+  d.setDate(d.getDate() - ((dow + 6) % 7));
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function getWeekDaysFromMonday(mondayDate) {
+  const names = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(mondayDate);
+    d.setDate(mondayDate.getDate() + i);
+    const dateStr = formatLocalDateStr(d);
+    return {
+      dateStr,
+      dayName: names[i],
+      dayNum: d.getDate(),
+      month: d.toLocaleDateString('en-US', { month: 'short' }),
+      monthNum: d.getMonth(),
+      year: d.getFullYear(),
+      label: d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' }),
+    };
+  });
+}
+
 /* Day chips helper: Current week Mon–Sat */
 function getCurrentWeekDays() {
   const mockStr = typeof window !== 'undefined' && (window.__MOCK_TIME__ || localStorage.getItem('freeroom_mock_time'));
@@ -90,7 +117,13 @@ function getCurrentWeekDays() {
 /* =========================================================
    SCREEN 1: FREE NOW
    ========================================================= */
+
+export function isClassOnlyRoom(name) {
+  return (name || '').toUpperCase() === 'SSB';
+}
+
 function FreeNowScreen() {
+  const { user } = useAuth();
   const navigate = useNavigate();
   const weekDays = getCurrentWeekDays();
 
@@ -137,13 +170,17 @@ function FreeNowScreen() {
     };
   }, []);
 
-  const DURATION_MAP = { any: 0, '30m': 30, '1h': 60, '2h': 120 };
+  const DURATION_MAP = { any: 1, '30m': 30, '1h': 60, '2h': 120 };
 
   const fetchRooms = useCallback(async () => {
     setLoading(true);
     try {
-      const minDuration = DURATION_MAP[durationKey] || 30;
+      const minDuration = DURATION_MAP[durationKey] ?? 30;
+      const storedBatch = user?.settings?.batch || localStorage.getItem('freeroom_student_batch');
+      const storedGroup = user?.settings?.group || localStorage.getItem('freeroom_student_group');
       const params = { buildingId: 1, minDuration };
+      if (storedBatch) params.batchYear = storedBatch;
+      if (storedGroup) params.group = storedGroup;
       if (floor !== 'all') params.floor = floor;
       const res = await roomsAPI.getFreeNow(params);
       setRooms(res.data.rooms || []);
@@ -152,7 +189,8 @@ function FreeNowScreen() {
       setIsAfterHours(!!res.data.is_after_last_class);
       const mockStr = window.__MOCK_TIME__ || localStorage.getItem('freeroom_mock_time');
       setLastUpdated(mockStr ? new Date(mockStr) : new Date());
-    } catch {
+    } catch (err) {
+      console.error('fetchRooms error:', err?.response?.data || err?.message || err);
       toast.error('Failed to load live availability');
     } finally {
       setLoading(false);
@@ -180,8 +218,12 @@ function FreeNowScreen() {
     }
   };
 
-  const allRooms = [...rooms, ...closedRooms];
-  const count = rooms.length;
+  // Room SSB is class-only for all batches; never shown as a free study room
+  const isFreeStudyRoom = (r) => !isClassOnlyRoom(r?.name);
+  const visibleRooms = rooms.filter(isFreeStudyRoom);
+  const visibleClosedRooms = closedRooms.filter(isFreeStudyRoom);
+  const allRooms = [...visibleRooms, ...visibleClosedRooms];
+  const count = visibleRooms.length;
   const updatedStr = lastUpdated
     ? lastUpdated.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
     : '4:43 pm';
@@ -386,12 +428,12 @@ function FreeNowScreen() {
                   Classrooms opening at {formatTime12(nextDayData?.opening_time) || '6:00 am'} on {nextDayData?.day_name}
                 </div>
                 <span style={{ fontSize: '13px', color: 'var(--green-text)', fontWeight: 600 }}>
-                  {nextDayData?.rooms?.filter((r) => r.status === 'free').length || 0} classrooms free morning
+                  {(nextDayData?.rooms || []).filter(isFreeStudyRoom).filter((r) => r.status === 'free').length || 0} classrooms free morning
                 </span>
               </div>
 
               <div className="rooms-grid" id="freenow-nextday-grid">
-                {nextDayData?.rooms?.map((room) => (
+                {(nextDayData?.rooms || []).filter(isFreeStudyRoom).map((room) => (
                   <RoomCard
                     key={room.id}
                     room={room}
@@ -485,7 +527,8 @@ function FreeNowScreen() {
 /* =========================================================
    SCREEN 2: FIND A ROOM (PRD v4: Free rooms & By room modes)
    ========================================================= */
-const ROOM_LIST = ['C', '1A', '1B', '2A', '2B', '2C'];
+const BASE_ROOM_LIST = ['C', '1A', '1B', '2A', '2B', '2C'];
+const ROOM_LIST = ['C', '1A', '1B', '2A', '2B', '2C', 'SSB'];
 
 const ROOM_META = {
   'C': { floor: 'Ground', seats: 200, submeta: null },
@@ -496,6 +539,7 @@ const ROOM_META = {
   '2B1': { floor: '2nd', seats: 100, submeta: null },
   '2B2': { floor: '2nd', seats: 100, submeta: null },
   '2C': { floor: '2nd', seats: 200, submeta: null },
+  'SSB': { floor: 'Ground', seats: 200, submeta: 'Class Access Only · No Open Study Seating' },
 };
 
 const TIME_OPTIONS = [
@@ -567,7 +611,9 @@ function FindRoomScreen() {
   const [searchReason, setSearchReason] = useState(null);
   const [loadingFree, setLoadingFree] = useState(false);
 
-  // By room mode: selected room & timeline
+  // By room mode: all batches have class access to SSB, but it is class-only (no open seating)
+  const availableRoomsList = ROOM_LIST;
+
   const [selectedRoom, setSelectedRoom] = useState(() => {
     return paramRoom && ROOM_LIST.includes(paramRoom) ? paramRoom : 'C';
   });
@@ -686,8 +732,9 @@ function FindRoomScreen() {
       const s = new Date(fi.start);
       const e = new Date(fi.end);
       if (isNaN(s.getTime()) || isNaN(e.getTime())) return;
+      const isClassOnly = isClassOnlyRoom(selectedRoom);
       slots.push({
-        type: 'free',
+        type: isClassOnly ? 'no_seating' : 'free',
         startMs: s.getTime(),
         endMs: e.getTime(),
         timeRange: `${formatTimeFromDate(s)} – ${formatTimeFromDate(e)}`,
@@ -836,7 +883,7 @@ function FindRoomScreen() {
             <div className="fr-panel-block">
               <div className="fr-panel-label">Room</div>
               <div className="fr-chip-row" id="room-chips">
-                {ROOM_LIST.map((rName) => (
+                {availableRoomsList.map((rName) => (
                   <button
                     key={rName}
                     type="button"
@@ -914,7 +961,9 @@ function FindRoomScreen() {
                     No timetable scheduled for this date
                   </div>
                   <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
-                    Room {selectedRoom} is free for open study.
+                    {isClassOnlyRoom(selectedRoom)
+                      ? 'Room SSB is reserved for scheduled classes only. No open study seating allowed.'
+                      : `Room ${selectedRoom} is free for open study.`}
                   </p>
                 </div>
               ) : (
@@ -926,6 +975,18 @@ function FindRoomScreen() {
                           <div className="fr-slot-top">
                             <span>{slot.timeRange}</span>
                             <span className="fr-tag-free">Free</span>
+                          </div>
+                        </div>
+                      );
+                    }
+                    if (slot.type === 'no_seating') {
+                      return (
+                        <div key={idx} className="fr-slot" style={{ opacity: 0.65, border: '1px dashed var(--border-control)' }}>
+                          <div className="fr-slot-top">
+                            <span>{slot.timeRange}</span>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                              No seating · Classes only
+                            </span>
                           </div>
                         </div>
                       );
@@ -966,7 +1027,9 @@ function FindRoomScreen() {
    ========================================================= */
 function filterGapRooms(roomsList) {
   if (!roomsList || roomsList.length === 0) return [];
-  const names = new Set(roomsList.map((r) => r.name));
+  // SSB is class-only; never suggest as a break study room for any batch
+  let list = roomsList.filter((r) => !isClassOnlyRoom(r?.name));
+  const names = new Set(list.map((r) => r.name));
   const has2B = names.has('2B');
   const has2B1 = names.has('2B1');
   const has2B2 = names.has('2B2');
@@ -974,7 +1037,7 @@ function filterGapRooms(roomsList) {
   // Rule: show 2B only when 2B1 and 2B2 are both free.
   // Otherwise show the free halves as 2B1 and/or 2B2, and do not show 2B.
   if (has2B1 && has2B2) {
-    const withoutHalves = roomsList.filter((r) => r.name !== '2B1' && r.name !== '2B2');
+    const withoutHalves = list.filter((r) => r.name !== '2B1' && r.name !== '2B2');
     if (!has2B) {
       withoutHalves.push({ id: '2B', name: '2B', floor: '2nd' });
     }
@@ -982,18 +1045,20 @@ function filterGapRooms(roomsList) {
   }
 
   if (has2B1 || has2B2) {
-    return roomsList.filter((r) => r.name !== '2B');
+    return list.filter((r) => r.name !== '2B');
   }
 
-  return roomsList;
+  return list;
 }
 
-const BATCH_CONFIG = {
-  2027: { groups: ['A'], term: 13 },
-  2028: { groups: ['A', 'B'], term: 9 },
-  2029: { groups: ['A', 'B', 'C'], term: 5 },
-  2030: { groups: ['A', 'B', 'C', 'D', 'E'], term: 1 },
+const DEFAULT_BATCH_CONFIG = {
+  2027: { groups: ['A'], term: 14 },
+  2028: { groups: ['A', 'B'], term: 10 },
+  2029: { groups: ['A', 'B', 'C'], term: 6 },
+  2030: { groups: ['A', 'B', 'C', 'D'], term: 2 },
 };
+
+const BATCH_CONFIG = DEFAULT_BATCH_CONFIG;
 
 const BATCH_LIST = [2027, 2028, 2029, 2030];
 
@@ -1003,29 +1068,31 @@ function GroupPickerModal({
   initialBatch,
   initialGroupLetter,
   onSave,
+  batchConfig = DEFAULT_BATCH_CONFIG,
 }) {
   const [selectedBatch, setSelectedBatch] = useState(initialBatch);
   const [selectedGroupLetter, setSelectedGroupLetter] = useState(initialGroupLetter);
   const [activeColumn, setActiveColumn] = useState('batch');
 
+  const config = batchConfig || DEFAULT_BATCH_CONFIG;
   const batches = BATCH_LIST;
-  const currentGroups = BATCH_CONFIG[selectedBatch]?.groups || ['A'];
+  const currentGroups = config[selectedBatch]?.groups || ['A'];
 
   useEffect(() => {
     if (isOpen) {
       const validBatch = BATCH_LIST.includes(initialBatch) ? initialBatch : 2029;
-      const validGroups = BATCH_CONFIG[validBatch]?.groups || ['A'];
+      const validGroups = config[validBatch]?.groups || ['A'];
       const safeGroup = validGroups.includes(initialGroupLetter) ? initialGroupLetter : validGroups[0];
       setSelectedBatch(validBatch);
       setSelectedGroupLetter(safeGroup);
       setActiveColumn('batch');
     }
-  }, [isOpen, initialBatch, initialGroupLetter]);
+  }, [isOpen, initialBatch, initialGroupLetter, config]);
 
   const handleSelectBatch = (b) => {
     setSelectedBatch(b);
     setActiveColumn('batch');
-    const validGroups = BATCH_CONFIG[b]?.groups || ['A'];
+    const validGroups = config[b]?.groups || ['A'];
     if (!validGroups.includes(selectedGroupLetter)) {
       setSelectedGroupLetter(validGroups[0]);
     }
@@ -1059,7 +1126,7 @@ function GroupPickerModal({
           const newB = idx > 0 ? batches[idx - 1] : batches[batches.length - 1];
           handleSelectBatch(newB);
         } else {
-          const validGroups = BATCH_CONFIG[selectedBatch]?.groups || ['A'];
+          const validGroups = config[selectedBatch]?.groups || ['A'];
           const idx = validGroups.indexOf(selectedGroupLetter);
           const newG = idx > 0 ? validGroups[idx - 1] : validGroups[validGroups.length - 1];
           setSelectedGroupLetter(newG);
@@ -1071,7 +1138,7 @@ function GroupPickerModal({
           const newB = idx < batches.length - 1 ? batches[idx + 1] : batches[0];
           handleSelectBatch(newB);
         } else {
-          const validGroups = BATCH_CONFIG[selectedBatch]?.groups || ['A'];
+          const validGroups = config[selectedBatch]?.groups || ['A'];
           const idx = validGroups.indexOf(selectedGroupLetter);
           const newG = idx < validGroups.length - 1 ? validGroups[idx + 1] : validGroups[0];
           setSelectedGroupLetter(newG);
@@ -1081,11 +1148,11 @@ function GroupPickerModal({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, activeColumn, selectedBatch, selectedGroupLetter, onClose, onSave]);
+  }, [isOpen, activeColumn, selectedBatch, selectedGroupLetter, onClose, onSave, batches, config]);
 
   if (!isOpen) return null;
 
-  const termNum = BATCH_CONFIG[selectedBatch]?.term || 5;
+  const termNum = config[selectedBatch]?.term || 6;
 
   return (
     <div className="group-picker-backdrop" onClick={onClose}>
@@ -1174,9 +1241,121 @@ function GroupPickerModal({
 function MyGroupScreen() {
   const { user, updateSettings } = useAuth();
   const navigate = useNavigate();
-  const weekDays = getCurrentWeekDays();
   const todayStr = getTodayStr();
   const tomorrowStr = getTomorrowStr();
+  const scheduleRef = useRef(null);
+
+  // Dynamic Week Monday state initialized to Monday of the initial day
+  const [weekMonday, setWeekMonday] = useState(() => {
+    const initDate = tomorrowStr
+      ? new Date(Number(tomorrowStr.split('-')[0]), Number(tomorrowStr.split('-')[1]) - 1, Number(tomorrowStr.split('-')[2]))
+      : new Date();
+    return getMondayOf(initDate);
+  });
+
+  const weekDays = getWeekDaysFromMonday(weekMonday);
+
+  const weekRangeLabel = (() => {
+    if (!weekDays || weekDays.length === 0) return '';
+    const startDay = weekDays[0];
+    const endDay = weekDays[5];
+    if (startDay.month === endDay.month) {
+      return `${startDay.dayNum} – ${endDay.dayNum} ${startDay.month}`;
+    }
+    return `${startDay.dayNum} ${startDay.month} – ${endDay.dayNum} ${endDay.month}`;
+  })();
+
+  const isCurrentWeek = (() => {
+    const curMon = getMondayOf(new Date());
+    return (
+      curMon.getFullYear() === weekMonday.getFullYear() &&
+      curMon.getMonth() === weekMonday.getMonth() &&
+      curMon.getDate() === weekMonday.getDate()
+    );
+  })();
+
+  const changeWeekBy = (deltaDays) => {
+    setWeekMonday((prevMonday) => {
+      const nextMon = new Date(prevMonday);
+      nextMon.setDate(nextMon.getDate() + deltaDays);
+
+      if (selectedDay) {
+        const [y, m, d] = selectedDay.split('-').map(Number);
+        const currDate = new Date(y, m - 1, d);
+        const dow = currDate.getDay();
+        const offset = dow === 0 ? 0 : dow - 1; // 0 for Mon ... 5 for Sat
+        const targetDate = new Date(nextMon);
+        targetDate.setDate(nextMon.getDate() + Math.min(Math.max(offset, 0), 5));
+        setSelectedDay(formatLocalDateStr(targetDate));
+      }
+
+      return nextMon;
+    });
+  };
+
+  const goToPrevWeek = () => changeWeekBy(-7);
+  const goToNextWeek = () => changeWeekBy(7);
+
+  const goToCurrentWeek = () => {
+    const today = new Date();
+    setWeekMonday(getMondayOf(today));
+    setSelectedDay(formatLocalDateStr(today));
+  };
+
+  const handleSelectCustomDate = (dateStr) => {
+    setSelectedDay(dateStr);
+    if (dateStr) {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      setWeekMonday(getMondayOf(new Date(y, m - 1, d)));
+    }
+  };
+
+  // Touch Swipe for Week: swipe left -> next week, swipe right -> prev week
+  const weekTouchStartX = useRef(null);
+  const weekTouchStartY = useRef(null);
+  const weekTouchStartTime = useRef(null);
+  const lastWeekSwipeTime = useRef(0);
+
+  const handleWeekTouchStart = (e) => {
+    if (e.touches && e.touches[0]) {
+      weekTouchStartX.current = e.touches[0].clientX;
+      weekTouchStartY.current = e.touches[0].clientY;
+      weekTouchStartTime.current = Date.now();
+    }
+  };
+
+  const handleWeekTouchEnd = (e) => {
+    if (weekTouchStartX.current == null || weekTouchStartY.current == null) return;
+    const now = Date.now();
+    // Enforce cooldown so only a single week is swiped at a time (slow down single scroll)
+    if (now - lastWeekSwipeTime.current < 450) {
+      weekTouchStartX.current = null;
+      weekTouchStartY.current = null;
+      return;
+    }
+
+    const touchEndX = e.changedTouches[0].clientX;
+    const touchEndY = e.changedTouches[0].clientY;
+    const dx = touchEndX - weekTouchStartX.current;
+    const dy = touchEndY - weekTouchStartY.current;
+    const dt = now - (weekTouchStartTime.current || 0);
+
+    // Clear horizontal swipe intent
+    if (Math.abs(dx) > Math.abs(dy) * 1.3 && (Math.abs(dx) > 35 || (Math.abs(dx) > 20 && dt < 250))) {
+      lastWeekSwipeTime.current = now;
+      if (dx < 0) {
+        // Swiped left (finger moves right to left) -> upcoming / next week
+        goToNextWeek();
+      } else {
+        // Swiped right (finger moves left to right) -> previous week
+        goToPrevWeek();
+      }
+    }
+
+    weekTouchStartX.current = null;
+    weekTouchStartY.current = null;
+    weekTouchStartTime.current = null;
+  };
 
   const savedBatchRaw = localStorage.getItem('freeroom_student_batch');
   const savedGroupRaw = localStorage.getItem('freeroom_student_group');
@@ -1206,8 +1385,35 @@ function MyGroupScreen() {
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  // Reset right schedule scroll to top on day change
+  useEffect(() => {
+    if (scheduleRef.current) {
+      scheduleRef.current.scrollTop = 0;
+    }
+  }, [selectedDay]);
+
+  const [batchConfig, setBatchConfig] = useState(DEFAULT_BATCH_CONFIG);
+
+  useEffect(() => {
+    let mounted = true;
+    roomsAPI.getBatchesAndGroups()
+      .then((res) => {
+        if (!mounted || !res.data?.batches) return;
+        const next = { ...DEFAULT_BATCH_CONFIG };
+        res.data.batches.forEach((b) => {
+          next[b.batchYear] = {
+            groups: b.groups && b.groups.length > 0 ? b.groups : (next[b.batchYear]?.groups || ['A']),
+            term: b.currentTerm || next[b.batchYear]?.term || 1,
+          };
+        });
+        setBatchConfig(next);
+      })
+      .catch(() => {});
+    return () => { mounted = false; };
+  }, []);
+
   const groupLetter = group.replace(/^Group\s*/i, '').trim() || 'A';
-  const termNum = BATCH_CONFIG[batch]?.term || 5;
+  const termNum = schedule?.term?.term_number || batchConfig[batch]?.term || DEFAULT_BATCH_CONFIG[batch]?.term || 6;
 
   // PRD v6 Section 3: On sign-in, if account already has settings, account's settings win
   useEffect(() => {
@@ -1227,7 +1433,7 @@ function MyGroupScreen() {
   // Auto-heal invalid group if loaded from previous mismatched state (e.g. 2028 with Group C)
   useEffect(() => {
     if (!hasPicked) return;
-    const validGroups = BATCH_CONFIG[batch]?.groups || ['A'];
+    const validGroups = (batchConfig || DEFAULT_BATCH_CONFIG)[batch]?.groups || ['A'];
     if (!validGroups.includes(groupLetter)) {
       const fixedGroup = `Group ${validGroups[0]}`;
       setGroup(fixedGroup);
@@ -1239,7 +1445,7 @@ function MyGroupScreen() {
   }, [batch, groupLetter, hasPicked, user, updateSettings]);
 
   const handleSavePicker = (newBatch, newGroupLetter) => {
-    const validGroups = BATCH_CONFIG[newBatch]?.groups || ['A'];
+    const validGroups = (batchConfig || DEFAULT_BATCH_CONFIG)[newBatch]?.groups || ['A'];
     const safeLetter = validGroups.includes(newGroupLetter) ? newGroupLetter : validGroups[0];
     const fullGroup = `Group ${safeLetter}`;
     setBatch(newBatch);
@@ -1303,7 +1509,51 @@ function MyGroupScreen() {
             <button className="change-btn" id="btn-change-group" onClick={() => setShowPicker(true)}>Change</button>
           </div>
 
-          <div className="days-grid" role="group" aria-label="Select Day">
+          {/* Week Navigation Header (Range + PC Prev/Next Buttons + Today Jump) */}
+          <div className="week-nav-bar">
+            <div className="week-nav-info">
+              <span className="week-nav-range">{weekRangeLabel}</span>
+              {!isCurrentWeek && (
+                <button
+                  type="button"
+                  className="week-nav-today-btn"
+                  onClick={goToCurrentWeek}
+                  title="Return to this week"
+                >
+                  This week
+                </button>
+              )}
+            </div>
+            <div className="week-nav-arrows">
+              <button
+                type="button"
+                className="week-nav-btn"
+                onClick={goToPrevWeek}
+                title="Previous week (or swipe right)"
+                aria-label="Previous week"
+              >
+                ‹
+              </button>
+              <button
+                type="button"
+                className="week-nav-btn"
+                onClick={goToNextWeek}
+                title="Next week (or swipe left)"
+                aria-label="Next week"
+              >
+                ›
+              </button>
+            </div>
+          </div>
+
+          <div
+            className="days-grid"
+            role="group"
+            aria-label="Select Day"
+            onTouchStart={handleWeekTouchStart}
+            onTouchEnd={handleWeekTouchEnd}
+            style={{ touchAction: "pan-y" }}
+          >
             {weekDays.map((d) => (
               <button
                 key={d.dateStr}
@@ -1319,7 +1569,7 @@ function MyGroupScreen() {
           <div style={{ marginTop: '12px' }}>
             <DatePicker
               value={selectedDay}
-              onChange={setSelectedDay}
+              onChange={handleSelectCustomDate}
               label="Other date…"
               id="mygroup-date"
               hideQuickPills={true}
@@ -1329,7 +1579,7 @@ function MyGroupScreen() {
         </div>
 
         {/* Right Schedule Timeline */}
-        <div className="mygroup-schedule">
+        <div className="mygroup-schedule" ref={scheduleRef}>
           <div className="schedule-header-pc">
             <h2 className="schedule-day-title" id="schedule-date-heading">{dateHeading}</h2>
             <span className="schedule-summary">
@@ -1373,6 +1623,9 @@ function MyGroupScreen() {
 
                 const gapAfter = schedule.gaps?.find((g) => g.start === cls.end_time);
                 const visibleGapRooms = gapAfter?.free_rooms ? filterGapRooms(gapAfter.free_rooms) : [];
+                const otherFreeRooms = visibleGapRooms.filter(
+                  (r) => !gapAfter?.plan?.chain?.some((s) => s.room_name === r.name)
+                );
 
                 return (
                   <div key={cls.id || idx}>
@@ -1400,24 +1653,105 @@ function MyGroupScreen() {
                       </button>
                     </div>
 
-                    {/* Gap between classes */}
+                    {/* Gap between classes / after last class (PRD v8 Room Chaining) */}
                     {gapAfter && (
                       <div className="gap-block">
-                        <div className="gap-title">
-                          {gapAfter.duration_minutes} min free · {formatTime12(gapAfter.start)} – {formatTime12(gapAfter.end)}
+                        <div className="gap-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                          <span>
+                            {gapAfter.is_after_last_class ? 'After classes' : 'Break'} · {gapAfter.duration_minutes >= 60 ? `${Math.floor(gapAfter.duration_minutes / 60)} h ${gapAfter.duration_minutes % 60 ? `${gapAfter.duration_minutes % 60} m` : ''}`.trim() : `${gapAfter.duration_minutes} min`} ({formatTime12(gapAfter.start)} – {formatTime12(gapAfter.end)})
+                          </span>
+                          {gapAfter.plan?.is_covered && (
+                            <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '12px', background: 'rgba(16, 185, 129, 0.15)', color: 'var(--green-text, #10b981)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                              {gapAfter.plan.level <= 2 ? 'Single Room' : 'Room Chain'}
+                            </span>
+                          )}
                         </div>
-                        {visibleGapRooms.length > 0 && (
-                          <div className="gap-rooms">
-                            {visibleGapRooms.map((r) => (
-                              <button
-                                key={r.id || r.name}
-                                className="gap-room-pill"
-                                onClick={() => navigate(`/find?mode=room&room=${encodeURIComponent(r.name)}`)}
-                                title={`${r.name} · ${r.floor} floor`}
-                              >
-                                {r.name}
-                              </button>
-                            ))}
+
+                        {/* PRD v8: Recommended Room or Chain Plan */}
+                        {gapAfter.plan?.is_covered && gapAfter.plan.chain?.length > 0 ? (
+                          gapAfter.plan.chain.length === 1 ? (
+                            <div style={{ marginTop: '8px', padding: '10px 14px', background: 'var(--bg-subtle, rgba(255,255,255,0.03))', borderRadius: '8px', border: '1px solid var(--border-subtle, rgba(255,255,255,0.08))' }}>
+                              <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                                Recommended for whole gap:
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="gap-room-pill"
+                                  style={{ padding: '6px 14px', fontSize: '13px', fontWeight: 700 }}
+                                  onClick={() => navigate(`/find?mode=room&room=${encodeURIComponent(gapAfter.plan.chain[0].room_name)}`)}
+                                >
+                                  Room {gapAfter.plan.chain[0].room_name}
+                                </button>
+                                <span style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>
+                                  {gapAfter.plan.chain[0].start_12h} – {gapAfter.plan.chain[0].end_12h} ({gapAfter.plan.chain[0].duration_minutes} min)
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={{ marginTop: '8px', padding: '10px 14px', background: 'var(--bg-subtle, rgba(255,255,255,0.03))', borderRadius: '8px', border: '1px solid var(--border-subtle, rgba(255,255,255,0.08))' }}>
+                              <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '8px', fontWeight: 500 }}>
+                                {gapAfter.plan.description}
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                {gapAfter.plan.chain.map((step, sIdx) => (
+                                  <div key={sIdx} style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                                    <button
+                                      type="button"
+                                      className="gap-room-pill"
+                                      style={{ padding: '5px 12px', fontSize: '12.5px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                                      onClick={() => navigate(`/find?mode=room&room=${encodeURIComponent(step.room_name)}`)}
+                                      title={`View Room ${step.room_name} schedule`}
+                                    >
+                                      <span>Room {step.room_name}</span>
+                                      <span style={{ opacity: 0.75, fontSize: '11px', fontWeight: 500 }}>
+                                        ({step.start_12h} – {step.end_12h})
+                                      </span>
+                                    </button>
+                                    {sIdx < gapAfter.plan.chain.length - 1 && (
+                                      <span style={{ color: 'var(--text-secondary)', fontWeight: 700, fontSize: '14px' }}>→</span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )
+                        ) : gapAfter.plan && !gapAfter.plan.is_covered && gapAfter.plan.level === 5 ? (
+                          <div style={{ marginTop: '8px', padding: '10px 14px', background: 'var(--bg-subtle, rgba(255,255,255,0.03))', borderRadius: '8px', border: '1px dashed var(--border-control)' }}>
+                            <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                              Gap not fully covered by a single plan. Longest available stretches:
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                              {gapAfter.plan.longest_stretches?.map((stretch, stIdx) => (
+                                <button
+                                  key={stIdx}
+                                  type="button"
+                                  className="gap-room-pill"
+                                  style={{ padding: '4px 10px', fontSize: '12px' }}
+                                  onClick={() => navigate(`/find?mode=room&room=${encodeURIComponent(stretch.room_name)}`)}
+                                >
+                                  Room {stretch.room_name}: {stretch.duration_minutes}m ({stretch.start_12h} – {stretch.end_12h})
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {/* Other individual rooms that are free for the whole gap */}
+                        {otherFreeRooms.length > 0 && (
+                          <div style={{ marginTop: '8px', display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Other free rooms:</span>
+                            {otherFreeRooms.map((r) => (
+                                <button
+                                  key={r.id || r.name}
+                                  className="gap-room-pill"
+                                  onClick={() => navigate(`/find?mode=room&room=${encodeURIComponent(r.name)}`)}
+                                  title={`${r.name} · ${r.floor} floor`}
+                                  style={{ padding: '3px 8px', fontSize: '12px' }}
+                                >
+                                  {r.name}
+                                </button>
+                              ))}
                           </div>
                         )}
                       </div>
@@ -1437,6 +1771,7 @@ function MyGroupScreen() {
           initialBatch={batch}
           initialGroupLetter={groupLetter}
           onSave={handleSavePicker}
+          batchConfig={batchConfig}
         />
       )}
     </section>

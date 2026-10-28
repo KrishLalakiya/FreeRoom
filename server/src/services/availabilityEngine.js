@@ -5,6 +5,7 @@ import {
   dayOfWeekInTz,
   addDaysToDateStr,
   zonedTimeToUtc,
+  formatTimeInTz,
 } from '../utils/timezone.js';
 import { availabilityCache, clearAvailabilityCache } from './cache.js';
 
@@ -1296,6 +1297,36 @@ async function getTimetableCoverage(buildingId) {
   const legacyRow = legacyRes.rows[0];
   if (!legacyRow || !legacyRow.valid_from) return null;
   return { valid_from: legacyRow.valid_from, valid_to: legacyRow.valid_to };
+}
+
+/**
+ * Get availability and free intervals in local time strings for all rooms in a building.
+ * Used by Room Chaining Engine (PRD v8).
+ */
+export async function getAllRoomsAvailabilityForDate(buildingId, dateStr) {
+  const rooms = await getRooms(buildingId);
+  const building = await getBuilding(buildingId);
+  if (!building) return [];
+  const dayOfWeek = dayOfWeekForDateStr(dateStr);
+
+  const list = [];
+  for (const room of rooms) {
+    const availability = await computeRoomAvailability(room, dateStr, dayOfWeek, building);
+    list.push({
+      id: room.id,
+      name: room.name,
+      floor: room.floor,
+      capacity: room.capacity,
+      parent_room_id: room.parent_room_id,
+      status: availability.status,
+      free_intervals: (availability.free_intervals || []).map((iv) => ({
+        start: formatTimeInTz(iv.start),
+        end: formatTimeInTz(iv.end),
+      })),
+      busy_blocks: availability.busy_blocks,
+    });
+  }
+  return list;
 }
 
 export { availabilityCache, clearAvailabilityCache };

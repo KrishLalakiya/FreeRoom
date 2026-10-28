@@ -6,7 +6,7 @@ import {
   addDaysToDateStr,
   isValidDateStr,
   getOffsetMinutes,
-} from '../utils/timezone.js';
+} from '../../src/utils/timezone.js';
 
 describe('campus timezone helpers', () => {
   const TZ = 'Asia/Kolkata';

@@ -34,7 +34,28 @@ function AdminNavbar() {
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    const handleSaveSettings = async (e) => {
+    e.preventDefault();
+    setSavingSettings(true);
+    try {
+      const res = await adminAPI.updateSettings({
+        chain_min_free_minutes: parseInt(chainMinFree, 10),
+        chain_enabled: chainEnabled,
+      });
+      if (res.data?.settings) {
+        setChainMinFree(res.data.settings.chain_min_free_minutes);
+        setChainEnabled(res.data.settings.chain_enabled);
+      }
+      toast.success('Room chaining settings saved');
+      await refreshActionLogs();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save settings');
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const initials = user?.name
@@ -200,7 +221,11 @@ export default function AdminPage() {
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState('events'); // 'events', 'cancel', 'timetable', 'import', 'closures'
+  const [activeTab, setActiveTab] = useState('events'); // 'events', 'cancel', 'timetable', 'import', 'closures', 'settings'
+  const [chainMinFree, setChainMinFree] = useState(15);
+  const [chainEnabled, setChainEnabled] = useState(true);
+  const [bufferMins, setBufferMins] = useState(0);
+  const [savingSettings, setSavingSettings] = useState(false);
   const [rooms, setRooms] = useState([]);
   const [events, setEvents] = useState([]);
   const [timetable, setTimetable] = useState([]);
@@ -443,8 +468,36 @@ export default function AdminPage() {
       await refreshActionLogs();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to create term');
+      if (err.response?.status === 409 || (err.response?.data?.message && err.response.data.message.includes('already exists'))) {
+        try {
+          const refreshed = await adminAPI.getTerms();
+          const list = refreshed.data.terms || [];
+          setTerms(list);
+          const found = list.find((t) => t.batch_year === parseInt(newBatchYear, 10) && t.term_number === parseInt(newTermNumber, 10));
+          if (found) {
+            setSelectedTermId(found.id.toString());
+            setShowCreateTerm(false);
+          }
+        } catch {}
+      }
     } finally {
       setCreatingTerm(false);
+    }
+  };
+
+  const handleDeleteTerm = async (t) => {
+    if (!window.confirm(`Are you sure you want to delete Term ${t.term_number} for Batch ${t.batch_year}? All timetable classes associated with this term will be permanently deleted.`)) {
+      return;
+    }
+    try {
+      await adminAPI.deleteTerm(t.id);
+      toast.success(`Deleted Term ${t.term_number} for Batch ${t.batch_year}`);
+      const refreshed = await adminAPI.getTerms();
+      setTerms(refreshed.data.terms || []);
+      setSelectedTermId('');
+      await refreshActionLogs();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete term');
     }
   };
 
@@ -669,6 +722,7 @@ export default function AdminPage() {
           <option value="cancel">Cancel a class</option>
           <option value="timetable">Master timetable</option>
           <option value="import">Import timetable</option>
+          <option value="settings">Room chaining settings</option>
         </select>
       </div>
 
@@ -708,6 +762,13 @@ export default function AdminPage() {
         >
           <HiOutlineUpload size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
           Import timetable
+        </button>
+        <button
+          className={`search-tab ${activeTab === 'settings' ? 'search-tab-active' : ''}`}
+          onClick={() => setActiveTab('settings')}
+        >
+          <HiOutlineClock size={16} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+          Room chaining settings
         </button>
       </div>
 
@@ -1048,7 +1109,6 @@ export default function AdminPage() {
                     <option value="">Choose batch and term</option>
                     {terms
                       .filter((t) => {
-                        if (parseInt(t.batch_year, 10) === 2030) return false;
                         const todayStr = new Date().toISOString().split('T')[0];
                         const endStr = String(t.end_date).slice(0, 10);
                         return endStr >= todayStr;
@@ -1074,11 +1134,23 @@ export default function AdminPage() {
                       const t = terms.find((term) => term.id.toString() === selectedTermId.toString());
                       return (
                         <>
-                          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
-                            Batch {t.batch_year} • Semester {t.semester_number} • Term {t.term_number}
-                          </div>
-                          <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-                            Term Duration: <strong>{String(t.start_date).slice(0, 10)}</strong> to <strong>{String(t.end_date).slice(0, 10)}</strong>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                                Batch {t.batch_year} • Semester {t.semester_number} • Term {t.term_number}
+                              </div>
+                              <div style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
+                                Term Duration: <strong>{String(t.start_date).slice(0, 10)}</strong> to <strong>{String(t.end_date).slice(0, 10)}</strong>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-ghost"
+                              style={{ color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.4)', fontSize: '0.8rem', padding: '4px 10px' }}
+                              onClick={() => handleDeleteTerm(t)}
+                            >
+                              Delete Term
+                            </button>
                           </div>
                         </>
                       );

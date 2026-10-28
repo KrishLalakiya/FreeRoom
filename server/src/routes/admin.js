@@ -3,8 +3,9 @@ import multer from 'multer';
 import { query } from '../config/db.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { importTimetable } from '../services/timetableImport.js';
-import { isValidDateStr } from '../utils/timezone.js';
+import { isValidDateStr, toDateStr } from '../utils/timezone.js';
 import { clearAvailabilityCache } from '../services/cache.js';
+import { getSystemSettings, updateSystemSettings } from '../services/systemSettings.js';
 
 const router = Router();
 
@@ -63,7 +64,7 @@ router.use(authenticate, requireAdmin);
  * GET /api/admin/action-logs
  * List recent admin actions (PRD v5).
  */
-router.get('/action-logs', authenticate, requireAdmin, async (req, res) => {
+router.get('/action-logs', async (req, res) => {
   try {
     const result = await query(`
       SELECT id, admin_id, admin_name, action_type, description, details, created_at
@@ -82,7 +83,7 @@ router.get('/action-logs', authenticate, requireAdmin, async (req, res) => {
  * POST /api/admin/events
  * Create a one-off event for a room.
  */
-router.post('/events', authenticate, requireAdmin, async (req, res) => {
+router.post('/events', async (req, res) => {
   try {
     const { roomId, title, startAt, endAt } = req.body;
 
@@ -139,7 +140,7 @@ router.post('/events', authenticate, requireAdmin, async (req, res) => {
  * DELETE /api/admin/events/:id
  * Cancel/delete an event.
  */
-router.delete('/events/:id', authenticate, requireAdmin, async (req, res) => {
+router.delete('/events/:id', async (req, res) => {
   try {
     const eventId = parseInt(req.params.id, 10);
 
@@ -163,7 +164,7 @@ router.delete('/events/:id', authenticate, requireAdmin, async (req, res) => {
  * POST /api/admin/cancel-class
  * Cancel a single occurrence of a recurring class.
  */
-router.post('/cancel-class', authenticate, requireAdmin, async (req, res) => {
+router.post('/cancel-class', async (req, res) => {
   try {
     const { timetableEntryId, date, reason } = req.body;
 
@@ -215,7 +216,7 @@ router.post('/cancel-class', authenticate, requireAdmin, async (req, res) => {
  * GET /api/admin/terms
  * List all terms with their associated batch year.
  */
-router.get('/terms', authenticate, requireAdmin, async (req, res) => {
+router.get('/terms', async (req, res) => {
   try {
     const result = await query(`
       SELECT t.id, t.batch_id, b.year as batch_year, t.semester_number, t.term_number,
@@ -235,7 +236,7 @@ router.get('/terms', authenticate, requireAdmin, async (req, res) => {
  * POST /api/admin/terms
  * Create a new term for a batch.
  */
-router.post('/terms', authenticate, requireAdmin, async (req, res) => {
+router.post('/terms', async (req, res) => {
   try {
     const { batchYear, semesterNumber, termNumber, startDate, endDate } = req.body;
 
@@ -294,8 +295,8 @@ router.post('/terms', authenticate, requireAdmin, async (req, res) => {
 
     if (overlapRes.rows.length > 0) {
       const clash = overlapRes.rows[0];
-      const startStr = clash.start_date instanceof Date ? clash.start_date.toISOString().slice(0, 10) : String(clash.start_date).slice(0, 10);
-      const endStr = clash.end_date instanceof Date ? clash.end_date.toISOString().slice(0, 10) : String(clash.end_date).slice(0, 10);
+      const startStr = clash.start_date instanceof Date ? toDateStr(clash.start_date) : String(clash.start_date).slice(0, 10);
+      const endStr = clash.end_date instanceof Date ? toDateStr(clash.end_date) : String(clash.end_date).slice(0, 10);
       return res.status(409).json({
         error: 'Overlapping term',
         message: `Term dates overlap with Term ${clash.term_number} (${startStr} to ${endStr}) for Batch ${bYear}.`,
@@ -327,7 +328,7 @@ router.post('/terms', authenticate, requireAdmin, async (req, res) => {
  * PUT /api/admin/terms/:id
  * Update an existing term.
  */
-router.put('/terms/:id', authenticate, requireAdmin, async (req, res) => {
+router.put('/terms/:id', async (req, res) => {
   try {
     const termId = parseInt(req.params.id, 10);
     const { semesterNumber, termNumber, startDate, endDate } = req.body;
@@ -381,8 +382,8 @@ router.put('/terms/:id', authenticate, requireAdmin, async (req, res) => {
 
     if (overlapRes.rows.length > 0) {
       const clash = overlapRes.rows[0];
-      const startStr = clash.start_date instanceof Date ? clash.start_date.toISOString().slice(0, 10) : String(clash.start_date).slice(0, 10);
-      const endStr = clash.end_date instanceof Date ? clash.end_date.toISOString().slice(0, 10) : String(clash.end_date).slice(0, 10);
+      const startStr = clash.start_date instanceof Date ? toDateStr(clash.start_date) : String(clash.start_date).slice(0, 10);
+      const endStr = clash.end_date instanceof Date ? toDateStr(clash.end_date) : String(clash.end_date).slice(0, 10);
       return res.status(409).json({
         error: 'Overlapping term',
         message: `Term dates overlap with Term ${clash.term_number} (${startStr} to ${endStr}).`,
@@ -410,7 +411,7 @@ router.put('/terms/:id', authenticate, requireAdmin, async (req, res) => {
  * DELETE /api/admin/terms/:id
  * Delete a term and its associated timetable entries (via cascade).
  */
-router.delete('/terms/:id', authenticate, requireAdmin, async (req, res) => {
+router.delete('/terms/:id', async (req, res) => {
   try {
     const termId = parseInt(req.params.id, 10);
     const result = await query('DELETE FROM terms WHERE id = $1 RETURNING *', [termId]);
@@ -433,9 +434,17 @@ router.delete('/terms/:id', authenticate, requireAdmin, async (req, res) => {
  * GET /api/admin/timetable
  * Get all timetable entries, optionally filtered by room or term.
  */
-router.get('/timetable', authenticate, requireAdmin, async (req, res) => {
+router.get('/timetable', async (req, res) => {
   try {
-    const roomId = req.query.roomId ? parseInt(req.query.roomId, 10) : null;
+    let roomId = null;
+    if (req.query.roomId) {
+      if (/^\d+$/.test(req.query.roomId)) {
+        roomId = parseInt(req.query.roomId, 10);
+      } else {
+        const lookup = await query('SELECT id FROM rooms WHERE UPPER(name) = UPPER($1)', [req.query.roomId]);
+        if (lookup.rows.length > 0) roomId = lookup.rows[0].id;
+      }
+    }
     const termId = req.query.termId ? parseInt(req.query.termId, 10) : null;
 
     let sql = `
@@ -476,7 +485,7 @@ router.get('/timetable', authenticate, requireAdmin, async (req, res) => {
  * GET /api/admin/events
  * List upcoming events.
  */
-router.get('/events', authenticate, requireAdmin, async (req, res) => {
+router.get('/events', async (req, res) => {
   try {
     const result = await query(`
       SELECT e.*, r.name as room_name, r.floor
@@ -504,7 +513,7 @@ router.get('/events', authenticate, requireAdmin, async (req, res) => {
  *   buildingId          (optional, default 1)
  *   saveValidRowsOnly   (optional) "true" to save good rows even if some fail
  */
-router.post('/timetable/import', authenticate, requireAdmin, upload.single('file'), async (req, res) => {
+router.post('/timetable/import', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -570,10 +579,10 @@ router.post('/timetable/import', authenticate, requireAdmin, upload.single('file
 
       const term = termRes.rows[0];
       validFrom = term.start_date instanceof Date
-        ? term.start_date.toISOString().slice(0, 10)
+        ? toDateStr(term.start_date)
         : String(term.start_date).slice(0, 10);
       validTo = term.end_date instanceof Date
-        ? term.end_date.toISOString().slice(0, 10)
+        ? toDateStr(term.end_date)
         : String(term.end_date).slice(0, 10);
     }
 
@@ -620,7 +629,7 @@ router.post('/timetable/import', authenticate, requireAdmin, upload.single('file
  * GET /api/admin/room-aliases
  * List room aliases used to map inconsistent timetable room names.
  */
-router.get('/room-aliases', authenticate, requireAdmin, async (req, res) => {
+router.get('/room-aliases', async (req, res) => {
   try {
     const result = await query(`
       SELECT a.id, a.alias, a.room_id, r.name AS room_name, r.floor
@@ -639,7 +648,7 @@ router.get('/room-aliases', authenticate, requireAdmin, async (req, res) => {
  * POST /api/admin/room-aliases
  * Map a timetable spelling to a room.
  */
-router.post('/room-aliases', authenticate, requireAdmin, async (req, res) => {
+router.post('/room-aliases', async (req, res) => {
   try {
     const { alias, roomId } = req.body;
 
@@ -682,7 +691,7 @@ router.post('/room-aliases', authenticate, requireAdmin, async (req, res) => {
 /**
  * DELETE /api/admin/room-aliases/:id
  */
-router.delete('/room-aliases/:id', authenticate, requireAdmin, async (req, res) => {
+router.delete('/room-aliases/:id', async (req, res) => {
   try {
     const aliasId = parseInt(req.params.id, 10);
     const result = await query('DELETE FROM room_aliases WHERE id = $1 RETURNING *', [aliasId]);
@@ -706,7 +715,7 @@ router.delete('/room-aliases/:id', authenticate, requireAdmin, async (req, res) 
  * GET /api/admin/closures
  * List all closures with room/building and creator details.
  */
-router.get('/closures', authenticate, requireAdmin, async (req, res) => {
+router.get('/closures', async (req, res) => {
   try {
     const result = await query(`
       SELECT
@@ -732,7 +741,7 @@ router.get('/closures', authenticate, requireAdmin, async (req, res) => {
  * POST /api/admin/closures
  * Create or merge an exam or emergency closure.
  */
-router.post('/closures', authenticate, requireAdmin, async (req, res) => {
+router.post('/closures', async (req, res) => {
   try {
     const {
       scope,
@@ -840,7 +849,7 @@ router.post('/closures', authenticate, requireAdmin, async (req, res) => {
     }
 
     // Warning for past dates (C11)
-    const today = new Date().toISOString().split('T')[0];
+    const today = toDateStr(new Date());
     let warning = null;
     if (startDate < today) {
       warning = 'Closure is scheduled in the past. Recorded for historical accuracy.';
@@ -945,7 +954,7 @@ router.post('/closures', authenticate, requireAdmin, async (req, res) => {
 /**
  * DELETE /api/admin/closures/:id
  */
-router.delete('/closures/:id', authenticate, requireAdmin, async (req, res) => {
+router.delete('/closures/:id', async (req, res) => {
   try {
     const closureId = parseInt(req.params.id, 10);
     const result = await query('DELETE FROM closures WHERE id = $1 RETURNING *', [closureId]);
@@ -969,7 +978,7 @@ router.delete('/closures/:id', authenticate, requireAdmin, async (req, res) => {
 /**
  * GET /api/admin/no-class-days
  */
-router.get('/no-class-days', authenticate, requireAdmin, async (req, res) => {
+router.get('/no-class-days', async (req, res) => {
   try {
     const result = await query(`
       SELECT n.*, u.name as creator_name
@@ -987,7 +996,7 @@ router.get('/no-class-days', authenticate, requireAdmin, async (req, res) => {
 /**
  * POST /api/admin/no-class-days
  */
-router.post('/no-class-days', authenticate, requireAdmin, async (req, res) => {
+router.post('/no-class-days', async (req, res) => {
   try {
     const { date, reason = 'Holiday', buildingId = 1 } = req.body;
     if (!date || !isValidDateStr(date)) {
@@ -1011,7 +1020,7 @@ router.post('/no-class-days', authenticate, requireAdmin, async (req, res) => {
 /**
  * DELETE /api/admin/no-class-days/:id
  */
-router.delete('/no-class-days/:id', authenticate, requireAdmin, async (req, res) => {
+router.delete('/no-class-days/:id', async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     const result = await query('DELETE FROM no_class_days WHERE id = $1 RETURNING *', [id]);
@@ -1024,6 +1033,49 @@ router.delete('/no-class-days/:id', authenticate, requireAdmin, async (req, res)
   } catch (err) {
     console.error('Delete no-class-day error:', err);
     res.status(500).json({ error: 'Failed to delete no-class day' });
+  }
+});
+
+/**
+ * GET /api/admin/settings
+ * Get system settings (PRD v8: X minimum free minutes, buffer, chaining enabled)
+ */
+router.get('/settings', async (req, res) => {
+  try {
+    const settings = await getSystemSettings();
+    res.json({ settings });
+  } catch (err) {
+    console.error('Fetch settings error:', err);
+    res.status(500).json({ error: 'Failed to fetch settings' });
+  }
+});
+
+/**
+ * PUT /api/admin/settings
+ * Update system settings (PRD v8)
+ */
+router.put('/settings', async (req, res) => {
+  try {
+    const { chain_min_free_minutes, chain_enabled, buffer_minutes } = req.body;
+    const updates = {};
+    if (chain_min_free_minutes !== undefined) {
+      const parsed = parseInt(chain_min_free_minutes, 10);
+      if (!isNaN(parsed) && parsed >= 1) updates.chain_min_free_minutes = parsed;
+    }
+    if (typeof chain_enabled === 'boolean') {
+      updates.chain_enabled = chain_enabled;
+    }
+    if (buffer_minutes !== undefined) {
+      const parsed = parseInt(buffer_minutes, 10);
+      if (!isNaN(parsed) && parsed >= 0) updates.buffer_minutes = parsed;
+    }
+
+    const settings = await updateSystemSettings(updates);
+    await logAdminAction(req, 'update_settings', `Updated room chaining settings: X=${settings.chain_min_free_minutes}m, Chaining=${settings.chain_enabled ? 'On' : 'Off'}`, updates);
+    res.json({ settings });
+  } catch (err) {
+    console.error('Update settings error:', err);
+    res.status(500).json({ error: 'Failed to update settings' });
   }
 });
 

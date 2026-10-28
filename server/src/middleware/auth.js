@@ -3,6 +3,9 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  throw new Error('FATAL: JWT_SECRET environment variable is required in production.');
+}
 const JWT_SECRET = process.env.JWT_SECRET || 'freeroom-dev-secret';
 
 /**
@@ -63,14 +66,30 @@ export function optionalAuthenticate(req, res, next) {
 /**
  * Require admin role. Must be used after authenticate.
  */
-export function requireAdmin(req, res, next) {
+export async function requireAdmin(req, res, next) {
   if (!req.user || req.user.role !== 'admin') {
     return res.status(403).json({
       error: 'Forbidden',
       message: 'Admin access required.',
     });
   }
-  next();
+
+  // PRD v7 Security P1: Verify role in database directly
+  try {
+    const { query } = await import('../config/db.js');
+    const dbUserRes = await query('SELECT role FROM users WHERE id = $1', [req.user.id]);
+    const currentRole = dbUserRes.rows[0]?.role;
+    if (currentRole !== 'admin') {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: 'Admin access required.',
+      });
+    }
+    req.user.role = currentRole;
+    next();
+  } catch (err) {
+    next();
+  }
 }
 
 /**

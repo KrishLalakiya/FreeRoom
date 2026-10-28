@@ -49,12 +49,22 @@ Before uploading a new term's spreadsheet:
 
 ## 4. Upload Method B: Operations CLI Script
 
-For automated or headless server environments, use the built-in upload CLI script:
+For automated or headless server environments, use the built-in upload CLI script located at `server/scripts/uploadNextTerm.js`:
 
 ```bash
+# Optional: test parsing and validation without writing to the database using --dry-run
+node server/scripts/uploadNextTerm.js \
+  --file "server/data/SST 2029 Batch Term 6 Syllabus.xlsx" \
+  --batch 2029 \
+  --semester 3 \
+  --term 6 \
+  --start 2026-10-29 \
+  --end 2027-01-31 \
+  --dry-run
+
 # Example: Uploading Batch 2029 Term 6
-node server/src/scripts/uploadNextTerm.js \
-  --file "path/to/SST 2029 Batch Term 6 Syllabus.xlsx" \
+node server/scripts/uploadNextTerm.js \
+  --file "server/data/SST 2029 Batch Term 6 Syllabus.xlsx" \
   --batch 2029 \
   --semester 3 \
   --term 6 \
@@ -62,22 +72,22 @@ node server/src/scripts/uploadNextTerm.js \
   --end 2027-01-31
 
 # Example: Uploading Batch 2028 Term 10
-node server/src/scripts/uploadNextTerm.js \
-  --file "path/to/SST 2028 Batch Term 10 Syllabus.xlsx" \
+node server/scripts/uploadNextTerm.js \
+  --file "server/data/SST 2028 Batch Term 10 Syllabus.xlsx" \
   --batch 2028 \
   --semester 5 \
   --term 10 \
   --start 2026-10-29 \
   --end 2027-01-31
 
-# Example: Uploading Batch 2030 Term 1 (New Batch)
-node server/src/scripts/uploadNextTerm.js \
-  --file "path/to/SST 2030 Batch Term 1 Syllabus.xlsx" \
+# Example: Uploading Batch 2030 Term 1
+node server/scripts/uploadNextTerm.js \
+  --file "server/data/SST 2030 Batch Term 1  Syllabus.xlsx" \
   --batch 2030 \
   --semester 1 \
   --term 1 \
-  --start 2026-10-29 \
-  --end 2027-01-31
+  --start 2026-08-06 \
+  --end 2026-10-24
 ```
 
 ---

@@ -7,7 +7,7 @@ import {
   doesClosureApplyToRoom,
   closureToBusyBlock,
   applyClosuresToAvailability,
-} from './availabilityEngine.js';
+} from '../../src/services/availabilityEngine.js';
 
 /**
  * Helper: create a Date from a time string on a fixed day (2026-10-26)

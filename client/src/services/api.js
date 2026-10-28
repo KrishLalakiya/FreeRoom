@@ -85,8 +85,8 @@ export const roomsAPI = {
   list: (buildingId = 1) =>
     api.get('/rooms', { params: { buildingId } }),
 
-  getBatchesAndGroups: () =>
-    api.get('/rooms/batches-and-groups'),
+  getBatchesAndGroups: (params) =>
+    api.get('/rooms/batches-and-groups', { params }),
 
   getMyGroup: (params) =>
     api.get('/rooms/my-group', { params }),
@@ -124,6 +124,9 @@ export const adminAPI = {
   createTerm: (data) =>
     api.post('/admin/terms', data),
 
+  deleteTerm: (termId) =>
+    api.delete(`/admin/terms/${termId}`),
+
   importTimetable: (formData) =>
     api.post('/admin/timetable/import', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
@@ -158,6 +161,12 @@ export const adminAPI = {
 
   getActionLogs: () =>
     api.get('/admin/action-logs'),
+
+  getSettings: () =>
+    api.get('/admin/settings'),
+
+  updateSettings: (data) =>
+    api.put('/admin/settings', data),
 };
 
 export default api;

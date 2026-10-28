@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { AvailabilityCache, clearAvailabilityCache, availabilityCache } from './cache.js';
+import { AvailabilityCache, clearAvailabilityCache, availabilityCache } from '../../src/services/cache.js';
 
 describe('AvailabilityCache (C10, PRD Section 6)', () => {
   let cache;

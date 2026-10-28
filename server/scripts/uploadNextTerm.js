@@ -16,10 +16,10 @@
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
-import { getClient, query } from '../config/db.js';
-import { importTimetable } from '../services/timetableImport.js';
-import { clearAvailabilityCache } from '../services/cache.js';
-import { isValidDateStr } from '../utils/timezone.js';
+import { getClient, query } from '../src/config/db.js';
+import { importTimetable } from '../src/services/timetableImport.js';
+import { clearAvailabilityCache } from '../src/services/cache.js';
+import { isValidDateStr } from '../src/utils/timezone.js';
 
 dotenv.config();
 
@@ -33,6 +33,7 @@ function parseArgs() {
     startDate: null,
     endDate: null,
     saveValidRowsOnly: false,
+    dryRun: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -44,6 +45,7 @@ function parseArgs() {
     else if (arg === '--start' && args[i + 1]) options.startDate = args[++i];
     else if (arg === '--end' && args[i + 1]) options.endDate = args[++i];
     else if (arg === '--saveValidRowsOnly') options.saveValidRowsOnly = true;
+    else if (arg === '--dry-run' || arg === '--dryRun') options.dryRun = true;
   }
 
   return options;
@@ -124,10 +126,11 @@ async function main() {
       validFrom: startDate,
       validTo: endDate,
       saveValidRowsOnly: options.saveValidRowsOnly,
+      dryRun: options.dryRun,
     });
 
     console.log('\n📊 Import Report:');
-    console.log(`   Committed:        ${report.committed ? 'YES ✅' : 'NO ❌'}`);
+    console.log(`   Committed:        ${report.committed ? 'YES ✅' : (report.dryRun ? 'DRY RUN (SKIPPED) 🔍' : 'NO ❌')}`);
     console.log(`   Parsed Classes:   ${report.parsedCount}`);
     console.log(`   Saved Rows:       ${report.savedCount}`);
     console.log(`   Duplicates:       ${report.duplicateCount}`);
@@ -152,12 +155,16 @@ async function main() {
       }
     }
 
-    // 4. Invalidate Cache
-    clearAvailabilityCache();
-    console.log('\n⚡ Availability cache cleared for fresh queries.');
+    if (!report.dryRun) {
+      // 4. Invalidate Cache
+      clearAvailabilityCache();
+      console.log('\n⚡ Availability cache cleared for fresh queries.');
+    } else {
+      console.log('\n🔍 Dry run completed successfully without writing to database.');
+    }
 
     console.log('\n✅ Next-Term Timetable operations upload completed successfully.');
-    process.exit(report.committed ? 0 : 1);
+    process.exit((report.committed || report.dryRun) ? 0 : 1);
   } catch (err) {
     console.error('\n💥 Fatal upload error:', err);
     process.exit(1);

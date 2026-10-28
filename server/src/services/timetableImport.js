@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import XLSX from 'xlsx';
 import { getClient } from '../config/db.js';
+import { toDateStr } from '../utils/timezone.js';
 
 const DAY_NAMES = {
   sunday: 0,
@@ -86,6 +87,21 @@ export function minutesToTime(minutes) {
   return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
 }
 
+export function isPhysicalRoomLine(line) {
+  if (!line || typeof line !== 'string') return false;
+  const trimmed = line.trim();
+
+  // 1. Blacklist: course tracks or virtual markers containing "classroom"
+  if (/^(?:l&d\s+classroom|virtual\s+classroom|google\s+classroom|online\s+classroom)/i.test(trimmed)) {
+    return false;
+  }
+
+  // 2. Whitelist: only actual physical campus room specifications:
+  // e.g. Classroom A, Classroom B, Classroom C, Classroom 1A, Classroom 1B, Classroom 2A, Classroom 2B, Classroom 2C,
+  // Classroom B1+B2 2nd Floor, Classroom B1, Classroom B2, Class B1 2nd floor, C groundfloor, 0C, etc.
+  return /(?:(?:classroom|cla?a?ss(?:room)?|clss|room|block)\s+(?:[012]?[a-c]\d*\b|b1\s*(?:\+|\/|and)\s*b2\b|[a-c]\b)|c\s*(?:ground\s*floor|groundfloor)|\b(?:ground|1st|ist|2nd)\s*floor\s*.*[a-c]\b|\b[012]?[a-c]\s+(?:ground|1st|ist|2nd)\s*floor\b|\b[12][a-c]\d*\b|\bssb(?:\s+classroom)?\b)/i.test(trimmed);
+}
+
 /**
  * Parse a class cell such as
  * "MERN - 2029, Grp A, (Mrinal), Classroom A 1st floor" or multi-line cell.
@@ -99,12 +115,18 @@ export function parseClassCell(raw) {
   const rawTrimmed = raw.trim();
   if (!rawTrimmed || isIgnoredCell(rawTrimmed)) return null;
 
-  // Standalone lab cell
-  if (/^lab$/i.test(rawTrimmed)) {
+  // Standalone lab cell (including L&D track lab cells)
+  if (/^lab$/i.test(rawTrimmed) || /^l&d\s+classroom\s+\d+\s*-\s*.*lab$/i.test(rawTrimmed)) {
+    const labSubject = rawTrimmed
+      .replace(/^l&d\s+classroom\s+\d+\s*-\s*/i, '')
+      .replace(/\s*-\s*202[0-9](?:\s*\+\s*202[0-9])*\b/g, '')
+      .replace(/\blab\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim() || 'Lab';
     return {
       isLabOnly: true,
-      course: 'Lab',
-      subject: 'Lab',
+      course: `${labSubject} (Lab)`,
+      subject: labSubject,
       group: null,
       groups: [],
       teacher: null,
@@ -126,7 +148,7 @@ export function parseClassCell(raw) {
   const parenMatch = rawTrimmed.match(/\(([^)]*)\)/);
   if (parenMatch) {
     const inside = parenMatch[1].trim();
-    if (/(classroom|class|floor|ground)/i.test(inside)) {
+    if (isPhysicalRoomLine(inside) || /(classroom|class|floor|ground)/i.test(inside)) {
       roomName = inside;
     } else {
       teacher = inside || null;
@@ -142,7 +164,7 @@ export function parseClassCell(raw) {
         continue;
       }
 
-      if (!roomName && /(classroom|cla?a?ss(?:room)?|clss|c\s*groundfloor|ground\s*floor|[12][a-c]\b|\b\d+(?:st|nd|rd|th)?\s*floor\b|\bfloor\b)/i.test(line)) {
+      if (!roomName && isPhysicalRoomLine(line)) {
         roomName = line.trim();
         continue;
       }
@@ -151,6 +173,10 @@ export function parseClassCell(raw) {
       if (grpMatch) {
         const parts = grpMatch[1].split('+').map((g) => g.trim().toUpperCase());
         groups.push(...parts);
+        const remainingLine = line.replace(grpMatch[0], '').replace(/\s+/g, ' ').trim();
+        if (remainingLine && !/^[,\-:]+$/.test(remainingLine)) {
+          remainingLines.push(remainingLine);
+        }
         continue;
       }
 
@@ -164,7 +190,8 @@ export function parseClassCell(raw) {
     let courseStr = remainingLines.join(' ');
     courseStr = courseStr.replace(/\([^)]*\)/g, ' ');
     const cleanSubject = courseStr
-      .replace(/\s*-\s*202[0-9]\b/g, '')
+      .replace(/\s*-\s*202[0-9](?:\s*\+\s*202[0-9])*\b/g, '')
+      .replace(/^l&d\s+classroom\s+\d+\s*-\s*/i, '')
       .replace(/\bLAB\b/gi, '')
       .replace(/\[[^\]]*\]/g, '')
       .replace(/\b(?:group|grp)\.?\s*[:\-]?\s*([a-z0-9]+(?:\s*\+\s*[a-z0-9]+)*)\b/gi, '')
@@ -202,12 +229,14 @@ export function parseClassCell(raw) {
   if (parts.length === 0) return null;
 
   if (parts.length >= 2 && !roomName) {
-    roomName = parts.pop();
+    if (isPhysicalRoomLine(parts[parts.length - 1])) {
+      roomName = parts.pop();
+    }
   }
 
   if (!roomName) {
-    const roomMatch = rest.match(/\b(?:(?:classroom|cla?a?ss(?:room)?|clss|room)\s+[12]?[a-c]\b.*|c\s*groundfloor|ground\s*floor|[12][a-c]\b|\b\d+(?:st|nd|rd|th)?\s*floor\b.*)/i);
-    if (roomMatch) {
+    const roomMatch = rest.match(/\b(?:(?:classroom|cla?a?ss(?:room)?|clss|room)\s+[12]?[a-c]\d*\b.*|c\s*groundfloor|ground\s*floor|\b[12][a-c]\d*\b|\b\d+(?:st|nd|rd|th)?\s*floor\b.*)/i);
+    if (roomMatch && isPhysicalRoomLine(roomMatch[0])) {
       roomName = roomMatch[0].trim();
       rest = rest.replace(roomMatch[0], ' ');
     }
@@ -526,18 +555,19 @@ export function parseTimetableWorkbook(buffer) {
         // Handle standalone Lab cell (C21)
         if (parsed.isLabOnly) {
           if (lastClassInCol) {
+            const inheritedSub = (parsed.subject && parsed.subject !== 'Lab') ? parsed.subject : lastClassInCol.subject;
             const labClass = {
               sheetRow: r + 1,
               column: col + 1,
               dayOfWeek,
               startTime: minutesToTime(startMinutes),
               endTime: minutesToTime(endMinutes),
-              course: `${lastClassInCol.subject} (Lab)`,
-              subject: lastClassInCol.subject,
-              teacher: lastClassInCol.teacher,
+              course: `${inheritedSub} (Lab)`,
+              subject: inheritedSub,
+              teacher: parsed.teacher || lastClassInCol.teacher,
               group: lastClassInCol.group,
               groups: lastClassInCol.groups,
-              roomName: lastClassInCol.roomName,
+              roomName: parsed.roomName || lastClassInCol.roomName,
               entryType: 'lab',
               raw: String(value),
             };
@@ -588,7 +618,7 @@ function timesOverlap(aStart, aEnd, bStart, bEnd) {
 }
 
 function timetableKey(row) {
-  return `${row.room_id}|${row.day_of_week}|${row.start}|${row.end}|${row.course}|${row.teacher}`;
+  return `${row.term_id || ''}|${row.room_id}|${row.day_of_week}|${row.start}|${row.end}|${row.course}|${row.teacher}`;
 }
 
 /**
@@ -613,6 +643,7 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
     validFrom,
     validTo,
     saveValidRowsOnly = false,
+    dryRun = false,
     batchYear,
     termNumber,
   } = options;
@@ -645,6 +676,14 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
         if (!validFrom) validFrom = termLookup.rows[0].start_date;
         if (!validTo) validTo = termLookup.rows[0].end_date;
       }
+    }
+
+    if (!termId) {
+      const err = new Error(
+        `Term record not found for Batch ${batchYear || 'unknown'} Term ${termNumber || 'unknown'}. Please create the term before importing timetable.`
+      );
+      err.code = 'TERM_NOT_FOUND';
+      throw err;
     }
 
     const roomRes = await client.query(
@@ -683,6 +722,13 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
       { pattern: /2b$/i, floor: '2nd', alias: 'Classroom B 2nd floor' },
       { pattern: /2b$/i, floor: '2nd', alias: 'Class B, 2nd Floor' },
       { pattern: /2b$/i, floor: '2nd', alias: 'Classroom B, 2nd Floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'Classroom B1+B2 2nd Floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'Classroom B1+B2 2nd floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'Classroom B1+B2' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'Class B1+B2 2nd floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'Class B1+B2 2nd Floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'B1+B2 2nd floor' },
+      { pattern: /2b$/i, floor: '2nd', alias: 'B1+B2 2nd Floor' },
       { pattern: /2a/i, floor: '2nd', alias: 'Class A 2nd floor' },
       { pattern: /2a/i, floor: '2nd', alias: 'Claas A 2nd floor' },
       { pattern: /2a/i, floor: '2nd', alias: 'Classroom A 2nd floor' },
@@ -697,6 +743,8 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
       { pattern: /^c$/i, floor: 'Ground', alias: 'Class C Ground floor' },
       { pattern: /^c$/i, floor: 'Ground', alias: 'Classroom C' },
       { pattern: /^c$/i, floor: 'Ground', alias: 'C groundfloor' },
+      { pattern: /^ssb$/i, alias: 'SSB Classroom' },
+      { pattern: /^ssb$/i, alias: 'ssb' },
     ];
 
     for (const def of defaultAliases) {
@@ -710,7 +758,9 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
                 `INSERT INTO room_aliases (alias, room_id) VALUES ($1, $2) ON CONFLICT (alias) DO NOTHING`,
                 [def.alias, r.id]
               );
-            } catch {}
+            } catch (aliasErr) {
+              console.warn(`Could not seed alias "${def.alias}":`, aliasErr.message);
+            }
           }
         }
       }
@@ -741,6 +791,21 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
       if (/a\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*a/i.test(key) || /\b2a\b/i.test(key) || key === 'class a 2nd floor' || key === 'classroom a 2nd floor') {
         for (const r of roomsById.values()) {
           if (r.floor?.toLowerCase().includes('2nd') && (r.name.toLowerCase() === '2a' || r.name.toLowerCase() === 'a')) return r.id;
+        }
+      }
+      // B1+B2 combined room resolves to parent room 2B
+      if (
+        /b1\s*(?:\+|\/|and)\s*b2/i.test(key) ||
+        /b\s*1\s*\+\s*2/i.test(key) ||
+        key.includes('b1+b2') ||
+        key.includes('b1 + b2') ||
+        key.includes('b1 and b2') ||
+        key.includes('b1/b2') ||
+        key === 'class b1+b2 2nd floor' ||
+        key === 'classroom b1+b2 2nd floor'
+      ) {
+        for (const r of roomsById.values()) {
+          if (r.floor?.toLowerCase().includes('2nd') && (r.name.toLowerCase() === '2b' || r.name.toLowerCase() === 'b')) return r.id;
         }
       }
       if (/b1\s*2nd\s*floor/i.test(key) || /2nd\s*floor\s*.*b1/i.test(key) || /\b2b1\b/i.test(key) || key === 'class b1 2nd floor' || key === 'classroom b1 2nd floor') {
@@ -793,10 +858,10 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
         batchId = termRes.rows[0].batch_id;
         batchYearResolved = termRes.rows[0].batch_year;
         termStart = termRes.rows[0].start_date instanceof Date
-          ? termRes.rows[0].start_date.toISOString().slice(0, 10)
+          ? toDateStr(termRes.rows[0].start_date)
           : String(termRes.rows[0].start_date).slice(0, 10);
         termEnd = termRes.rows[0].end_date instanceof Date
-          ? termRes.rows[0].end_date.toISOString().slice(0, 10)
+          ? toDateStr(termRes.rows[0].end_date)
           : String(termRes.rows[0].end_date).slice(0, 10);
 
         if (validFrom && (validFrom < termStart || validFrom > termEnd)) {
@@ -839,6 +904,7 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
     );
 
     const existing = existingRes.rows.map((row) => ({
+      term_id: row.term_id,
       room_id: row.room_id,
       course: String(row.course_name || '').toLowerCase().trim(),
       teacher: String(row.teacher || '').toLowerCase().trim(),
@@ -924,6 +990,7 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
       }
 
       const candidate = {
+        term_id: termId,
         room_id: roomId,
         course: cls.course.toLowerCase().trim(),
         teacher: (cls.teacher || '').toLowerCase().trim(),
@@ -968,6 +1035,11 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
 
       let hasSameBatchClash = false;
       for (const clash of clashingExisting) {
+        // A different term of the same batch (e.g. past Term 5 vs new Term 6) does not clash
+        if (clash.term_id && termId && clash.term_id !== termId && clash.batch_id === batchId) {
+          continue;
+        }
+
         const isCrossBatch = clash.batch_id && batchId && clash.batch_id !== batchId;
         if (isCrossBatch) {
           warnings.push({
@@ -1020,6 +1092,22 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
         warnings: [...parsed.warnings, ...warnings],
         unmappedRooms: [...unmapped.values()],
         message: 'Upload rejected because some rows were invalid. Nothing was saved.',
+      };
+    }
+
+    if (dryRun) {
+      await client.query('ROLLBACK');
+      return {
+        committed: false,
+        dryRun: true,
+        sheetName: parsed.sheetName,
+        parsedCount: parsed.classes.length,
+        savedCount: accepted.length,
+        duplicateCount: duplicates,
+        errors,
+        warnings: [...parsed.warnings, ...warnings],
+        unmappedRooms: [...unmapped.values()],
+        message: 'Dry run completed. Parsed rows validated but no changes were committed.',
       };
     }
 

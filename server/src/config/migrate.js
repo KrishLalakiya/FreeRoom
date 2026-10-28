@@ -167,21 +167,29 @@ async function migrate() {
       );
     `);
 
-    // v2 columns added via ALTER for existing databases
+    // ── Schema migrations tracking (PRD v7 Section 5 Item 10) ──
     await client.query(`
-      DO $$ BEGIN
-        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS term_id INTEGER REFERENCES terms(id) ON DELETE CASCADE;
-        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL;
-        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS instructor_id INTEGER REFERENCES instructors(id) ON DELETE SET NULL;
-        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS entry_type VARCHAR(20) NOT NULL DEFAULT 'class';
-        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS raw_cell TEXT;
-        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS sheet_name VARCHAR(255);
-        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS sheet_row INTEGER;
-        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS sheet_col INTEGER;
-        ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS source_file VARCHAR(255);
-      EXCEPTION WHEN others THEN NULL;
-      END $$;
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version     VARCHAR(255) PRIMARY KEY,
+        applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
+
+    // v2 columns added via ALTER for existing databases (PRD v7 Section 5 Item 9: no silent catches)
+    const v2AlterQueries = [
+      "ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS term_id INTEGER REFERENCES terms(id) ON DELETE CASCADE",
+      "ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS subject_id INTEGER REFERENCES subjects(id) ON DELETE SET NULL",
+      "ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS instructor_id INTEGER REFERENCES instructors(id) ON DELETE SET NULL",
+      "ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS entry_type VARCHAR(20) NOT NULL DEFAULT 'class'",
+      "ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS raw_cell TEXT",
+      "ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS sheet_name VARCHAR(255)",
+      "ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS sheet_row INTEGER",
+      "ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS sheet_col INTEGER",
+      "ALTER TABLE timetable_entries ADD COLUMN IF NOT EXISTS source_file VARCHAR(255)",
+    ];
+    for (const q of v2AlterQueries) {
+      await client.query(q);
+    }
 
     // ── Timetable entry ↔ groups junction (C17) ──────────
     // A class can belong to zero, one or several groups.
@@ -340,6 +348,15 @@ async function migrate() {
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_admin_actions_created_at
       ON admin_actions (created_at DESC);
+    `);
+
+    // ── System settings (PRD v8: X minimum free minutes, buffer, chain enabled) ──
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key         VARCHAR(100) PRIMARY KEY,
+        value       JSONB NOT NULL,
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
     `);
 
     await client.query('COMMIT');

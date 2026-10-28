@@ -36,7 +36,7 @@ app.use(cors({
       allowedOrigins.some((o) => o && o.replace(/\/$/, '') === cleanOrigin) ||
       cleanOrigin.includes('localhost') ||
       cleanOrigin.includes('127.0.0.1') ||
-      cleanOrigin.endsWith('.vercel.app')
+      (cleanOrigin.endsWith('.vercel.app') && process.env.NODE_ENV === 'development')
     ) {
       return callback(null, true);
     }
@@ -56,14 +56,15 @@ const loginLimiter = rateLimit({
 });
 
 const apiLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 120,
+  windowMs: 1 * 60 * 1000,
+  max: process.env.NODE_ENV === 'development' ? 5000 : 120,
+  skip: (req) => process.env.NODE_ENV === 'development' || req.ip === '127.0.0.1' || req.ip === '::1',
   message: { error: 'Too many requests. Please slow down.' },
 });
 
 // ── Routes ────────────────────────────────────────────────
 
-app.use('/api/auth', loginLimiter, authRoutes);
+app.use('/api/auth', apiLimiter, authRoutes);
 app.use('/api/rooms', apiLimiter, roomRoutes);
 app.use('/api/reports', apiLimiter, reportRoutes);
 app.use('/api/admin', apiLimiter, adminRoutes);

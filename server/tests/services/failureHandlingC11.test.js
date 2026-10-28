@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isValidDateStr } from '../utils/timezone.js';
+import { isValidDateStr } from '../../src/utils/timezone.js';
 
 describe('Validation and Failure Handling (C11, PRD Sections 3 & 4)', () => {
   // Helper mirroring closure validation rules

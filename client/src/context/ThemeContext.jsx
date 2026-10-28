@@ -6,7 +6,8 @@ export function ThemeProvider({ children }) {
   const [theme, setTheme] = useState(() => {
     try {
       const saved = localStorage.getItem('freeroom_theme');
-      if (saved === 'dark' || saved === 'darker' || saved === 'light') return saved;
+      if (saved === 'dark' || saved === 'darker') return 'dark';
+      if (saved === 'light') return 'light';
       return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
         ? 'dark'
         : 'light';
@@ -24,7 +25,7 @@ export function ThemeProvider({ children }) {
     // Update browser theme-color meta tag
     const metaThemeColor = document.querySelector('meta[name="theme-color"]');
     if (metaThemeColor) {
-      const color = theme === 'darker' ? '#05070a' : (theme === 'dark' ? '#0d1117' : '#faf9f5');
+      const color = theme === 'dark' ? '#0b0c0e' : '#faf9f5';
       metaThemeColor.setAttribute('content', color);
     }
   }, [theme]);
@@ -39,7 +40,7 @@ export function ThemeProvider({ children }) {
         theme,
         setTheme,
         toggleTheme,
-        isDark: theme === 'dark' || theme === 'darker',
+        isDark: theme === 'dark',
       }}
     >
       {children}

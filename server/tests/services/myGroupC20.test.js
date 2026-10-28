@@ -3,14 +3,14 @@ import { describe, it, expect } from 'vitest';
 describe('My Group Schedule and Gaps (C20, PRD Section 2)', () => {
   // Pure logic helper mirroring the my-group filtering
   function filterClassesForGroup(classes, targetGroup) {
-    const targetLetter = targetGroup.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const targetLetter = targetGroup.replace(/^Group\s*/i, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
     return classes.filter((cls) => {
       const groups = cls.groups || [];
       if (groups.length === 0) return true; // Whole-batch class
 
       return groups.some((g) => {
-        const norm = g.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        const norm = g.replace(/^Group\s*/i, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
         return norm === targetLetter || norm.includes(targetLetter);
       });
     });
@@ -89,5 +89,18 @@ describe('My Group Schedule and Gaps (C20, PRD Section 2)', () => {
     ];
     const gaps = calculateGaps(contiguous, 15);
     expect(gaps).toEqual([]);
+  });
+
+  it('excludes SSB from free study rooms for all batches (class-only room, no open seating)', () => {
+    const freeRooms = [
+      { id: 1, name: '1A' },
+      { id: 2, name: '2A' },
+      { id: 57, name: 'SSB' },
+    ];
+    function filterGapRoomsForStudy(rooms) {
+      return rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+    }
+
+    expect(filterGapRoomsForStudy(freeRooms).map((r) => r.name)).toEqual(['1A', '2A']);
   });
 });

@@ -7,7 +7,8 @@ import {
   normalizeRoomKey,
   isIgnoredCell,
   minutesToTime,
-} from './timetableImport.js';
+  isPhysicalRoomLine,
+} from '../../src/services/timetableImport.js';
 
 function buildWorkbookBuffer() {
   const aoa = [
@@ -195,5 +196,57 @@ describe('Sheet differences handling (C21)', () => {
     expect(parsedB1).toBeDefined();
     expect(parsedB1.roomName).toBe('Class B1 2nd floor');
     expect(normalizeRoomKey(parsedB1.roomName)).toBe('class b1 2nd floor');
+  });
+
+  it('correctly discriminates physical rooms from L&D track headers (isPhysicalRoomLine)', () => {
+    expect(isPhysicalRoomLine('L&D Classroom 1 - DSA - 2028')).toBe(false);
+    expect(isPhysicalRoomLine('L&D Classroom 2 - GenAI - 2028')).toBe(false);
+    expect(isPhysicalRoomLine('L&D Classroom 3 - CS Fund. / LLD - 2028')).toBe(false);
+    expect(isPhysicalRoomLine('Virtual Classroom')).toBe(false);
+
+    expect(isPhysicalRoomLine('Classroom B1+B2 2nd Floor')).toBe(true);
+    expect(isPhysicalRoomLine('Classroom A 1st floor')).toBe(true);
+    expect(isPhysicalRoomLine('Classroom B 1st floor')).toBe(true);
+    expect(isPhysicalRoomLine('Classroom C Ground floor')).toBe(true);
+    expect(isPhysicalRoomLine('Classroom A 2nd floor')).toBe(true);
+    expect(isPhysicalRoomLine('Classroom C 2nd floor')).toBe(true);
+    expect(isPhysicalRoomLine('C groundfloor')).toBe(true);
+  });
+
+  it('correctly extracts physical room from cell with L&D course track on line 1', () => {
+    const raw = 'L&D Classroom 1 - DSA - 2028\nGrp A\n(Pushkar)\nClassroom B1+B2 2nd Floor';
+    const parsed = parseClassCell(raw);
+    expect(parsed).toBeDefined();
+    expect(parsed.roomName).toBe('Classroom B1+B2 2nd Floor');
+    expect(parsed.course).toBe('L&D Classroom 1 - DSA - 2028');
+    expect(parsed.teacher).toBe('Pushkar');
+    expect(parsed.group).toBe('A');
+  });
+
+  it('correctly extracts course title when group is on the same line', () => {
+    const raw = 'NLP & Transformers [AI/ML] LAB - 2028 Grp A\n(Manu Gupta)\nClassroom B1+B2 2nd Floor';
+    const parsed = parseClassCell(raw);
+    expect(parsed).toBeDefined();
+    expect(parsed.course).toBe('NLP & Transformers [AI/ML] LAB - 2028');
+    expect(parsed.teacher).toBe('Manu Gupta');
+    expect(parsed.roomName).toBe('Classroom B1+B2 2nd Floor');
+    expect(parsed.group).toBe('A');
+
+    const mkt = 'Marketing Strategies - 2027 + 2028 Grp A+B \n(Kanika)\nClassroom B1+B2 2nd Floor';
+    const parsedMkt = parseClassCell(mkt);
+    expect(parsedMkt).toBeDefined();
+    expect(parsedMkt.course).toBe('Marketing Strategies - 2027 + 2028');
+    expect(parsedMkt.teacher).toBe('Kanika');
+    expect(parsedMkt.roomName).toBe('Classroom B1+B2 2nd Floor');
+    expect(parsedMkt.groups).toEqual(['A', 'B']);
+  });
+
+  it('handles L&D standalone lab continuation cells', () => {
+    const raw = 'L&D Classroom 1 - DSA LAB';
+    const parsed = parseClassCell(raw);
+    expect(parsed.isLabOnly).toBe(true);
+    expect(parsed.entryType).toBe('lab');
+    expect(parsed.subject).toBe('DSA');
+    expect(parsed.roomName).toBeNull();
   });
 });

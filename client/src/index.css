@@ -66,65 +66,15 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.08);
   --transition-fast: 150ms ease;
   --transition-normal: 200ms ease;
+
+  --scrollbar-thumb: rgba(0, 0, 0, 0.22);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.42);
 }
 
 /* =========================================================
-   2. DARK MODE TOKENS — Claude / Anthropic Warm Obsidian (1st Pref)
+   2. DARK MODE TOKENS — Raycast / Linear Neutral Carbon
    ========================================================= */
-[data-theme="dark"] {
-  --bg-page: #141413;
-  --bg-card: #1c1b19;
-  --bg-subtle: #262522;
-  --bg-input: #1c1b19;
-  --border-subtle: #2e2c28;
-  --border-control: #3d3a34;
-  --border-hover: #524e46;
-  --border-urgent: #d96250;
-
-  --text-primary: #f0eee9;
-  --text-secondary: #a39e93;
-  --text-muted: #706c64;
-
-  --accent-black: #f0eee9;
-  --accent-black-text: #141413;
-  --btn-primary-hover: #dcd8cf;
-
-  --green-bg: rgba(46, 184, 103, 0.15);
-  --green-text: #5ce08e;
-  --green-border: #2eb867;
-  --green-surface-subtle: rgba(46, 184, 103, 0.07);
-  --green-border-subtle: rgba(46, 184, 103, 0.25);
-
-  --urgent-bg: #b83f31;
-  --urgent-text: #faf9f5;
-  --urgent-surface-subtle: rgba(217, 98, 80, 0.08);
-  --urgent-border-subtle: rgba(217, 98, 80, 0.28);
-
-  /* Compatibility aliases */
-  --bg-primary: var(--bg-page);
-  --bg-secondary: var(--bg-subtle);
-  --border-color: var(--border-subtle);
-  --accent-primary: var(--accent-black);
-  --accent-primary-light: #f0eee9;
-  --accent-primary-dark: #dcd8cf;
-  --accent-success: var(--green-text);
-  --accent-success-bg: var(--green-bg);
-  --border-success: var(--green-border);
-  --accent-danger: #f07161;
-  --accent-danger-bg: rgba(240, 113, 97, 0.14);
-  --accent-warning: #e5b553;
-  --accent-warning-bg: rgba(229, 181, 83, 0.14);
-  --accent-info: #79b8ff;
-  --accent-info-bg: rgba(121, 184, 255, 0.14);
-
-  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.65);
-}
-
-/* =========================================================
-   3. DARKER MODE TOKENS — Raycast / Linear Neutral Carbon (2nd Pref)
-   ========================================================= */
+[data-theme="dark"],
 [data-theme="darker"] {
   --bg-page: #0b0c0e;
   --bg-card: #121316;
@@ -174,6 +124,9 @@
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.65);
   --shadow-md: 0 6px 22px rgba(0, 0, 0, 0.75);
   --shadow-lg: 0 16px 44px rgba(0, 0, 0, 0.9);
+
+  --scrollbar-thumb: rgba(255, 255, 255, 0.20);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.40);
 }
 
 /* =========================================================
@@ -184,6 +137,45 @@
   padding: 0;
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* =========================================================
+   UNIVERSAL MINIMAL AUTO-HIDING SCROLLBAR
+   ========================================================= */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover,
+*[data-scrolling="true"],
+body[data-scrolling="true"] * {
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  transition: background 0.25s ease-out;
+}
+
+*:hover::-webkit-scrollbar-thumb,
+*[data-scrolling="true"]::-webkit-scrollbar-thumb,
+body[data-scrolling="true"] *::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
 
 html {
@@ -256,11 +248,7 @@ option {
   color: #111827;
 }
 
-[data-theme="dark"] option {
-  background-color: #1c1b19 !important;
-  color: #f0eee9 !important;
-}
-
+[data-theme="dark"] option,
 [data-theme="darker"] option {
   background-color: #121316 !important;
   color: #f2f3f5 !important;
@@ -398,20 +386,13 @@ option {
   flex-shrink: 0;
 }
 
-[data-theme="dark"] .theme-quick-btn {
-  background-color: #484c54;
-  color: #ffffff;
-}
-
-[data-theme="dark"] .theme-quick-btn:hover {
-  background-color: #525660;
-}
-
+[data-theme="dark"] .theme-quick-btn,
 [data-theme="darker"] .theme-quick-btn {
   background-color: #232730;
   color: #ffffff;
 }
 
+[data-theme="dark"] .theme-quick-btn:hover,
 [data-theme="darker"] .theme-quick-btn:hover {
   background-color: #2d323e;
 }
@@ -450,13 +431,7 @@ option {
   transform: translateX(-50%) translateY(0) !important;
 }
 
-[data-theme="dark"] .theme-tooltip {
-  background: #464a52;
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-}
-
+[data-theme="dark"] .theme-tooltip,
 [data-theme="darker"] .theme-tooltip {
   background: #1c2028;
   color: #f3f4f6;
@@ -494,24 +469,14 @@ option {
   color: #000000;
 }
 
-[data-theme="dark"] .btn-header-signin {
-  background-color: #27282b;
-  color: #f3f4f6;
-  border-color: #3f4246;
-}
-
-[data-theme="dark"] .btn-header-signin:hover {
-  background-color: #32353a;
-  border-color: #55585f;
-  color: #ffffff;
-}
-
+[data-theme="dark"] .btn-header-signin,
 [data-theme="darker"] .btn-header-signin {
   background-color: #1a1b1e;
   color: #f0eee9;
   border-color: #2e3035;
 }
 
+[data-theme="dark"] .btn-header-signin:hover,
 [data-theme="darker"] .btn-header-signin:hover {
   background-color: #222328;
   border-color: #3e4249;
@@ -685,7 +650,7 @@ option {
 
 .theme-toggle-pills {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 4px;
 }
 
@@ -1413,6 +1378,73 @@ option {
 
 .change-btn:hover {
   background-color: var(--bg-subtle);
+  border-color: var(--border-hover);
+}
+
+/* Week Navigation Bar (Desktop & Mobile) */
+.week-nav-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  user-select: none;
+}
+
+.week-nav-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.week-nav-range {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: -0.01em;
+}
+
+.week-nav-today-btn {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-control);
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.week-nav-today-btn:hover {
+  background: var(--border-subtle);
+  border-color: var(--border-hover);
+}
+
+.week-nav-arrows {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.week-nav-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.week-nav-btn:hover {
+  background: var(--bg-subtle);
   border-color: var(--border-hover);
 }
 
@@ -3171,11 +3203,7 @@ select.input-field {
   color: #111827;
 }
 
-[data-theme="dark"] .fr-time-select option {
-  background-color: #1c1b19 !important;
-  color: #f0eee9 !important;
-}
-
+[data-theme="dark"] .fr-time-select option,
 [data-theme="darker"] .fr-time-select option {
   background-color: #121316 !important;
   color: #f2f3f5 !important;
@@ -3643,5 +3671,46 @@ select.input-field {
   }
   .admin-name-text {
     display: none !important;
+  }
+}
+/* =========================================================
+   DESKTOP STICKY SIDEBAR & INDEPENDENT VIEWPORT LAYOUT
+   The left sidebar stays pinned in view while the schedule scrolls.
+   ========================================================= */
+@media (min-width: 769px) {
+  .mygroup-layout {
+    display: grid;
+    grid-template-columns: 270px minmax(0, 1fr);
+    gap: 48px;
+    align-items: start;
+  }
+
+  .mygroup-sidebar {
+    position: sticky;
+    top: 80px;
+    align-self: start;
+  }
+
+  .fr-panel {
+    position: sticky;
+    top: 80px;
+    align-self: start;
+  }
+
+  .schedule-header-pc {
+    position: sticky;
+    top: 60px;
+    z-index: 10;
+    background-color: var(--bg-page);
+    padding: 12px 0 16px;
+    margin-bottom: 16px;
+  }
+
+  .fr-section-head {
+    position: sticky;
+    top: 60px;
+    z-index: 10;
+    background-color: var(--bg-page);
+    padding-top: 12px;
   }
 }

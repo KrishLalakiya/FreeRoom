@@ -1,8 +1,16 @@
 import { Router } from 'express';
 import { query } from '../config/db.js';
-import { getFreeRoomsNow, getFreeRoomsForWindow, getRoomTimeline, getNextDayTimetableData } from '../services/availabilityEngine.js';
+import {
+  getFreeRoomsNow,
+  getFreeRoomsForWindow,
+  getRoomTimeline,
+  getNextDayTimetableData,
+  getAllRoomsAvailabilityForDate,
+} from '../services/availabilityEngine.js';
+import { calculateGapPlan } from '../services/roomChainingEngine.js';
+import { getSystemSettings } from '../services/systemSettings.js';
 import { optionalAuthenticate } from '../middleware/auth.js';
-import { toDateStr, isValidDateStr, dayOfWeekForDateStr } from '../utils/timezone.js';
+import { toDateStr, isValidDateStr, dayOfWeekForDateStr, parseMockOrNow } from '../utils/timezone.js';
 
 const router = Router();
 
@@ -14,7 +22,7 @@ const router = Router();
 router.get('/free-now', optionalAuthenticate, async (req, res) => {
   try {
     const buildingId = parseInt(req.query.buildingId || '1', 10);
-    const minDuration = parseInt(req.query.minDuration || '60', 10);
+    let minDuration = parseInt(req.query.minDuration || '60', 10);
     const floor = req.query.floor || null;
 
     if (!Number.isInteger(buildingId) || buildingId < 1) {
@@ -24,17 +32,25 @@ router.get('/free-now', optionalAuthenticate, async (req, res) => {
       });
     }
 
-    if (minDuration < 1 || minDuration > 720) {
-      return res.status(400).json({
-        error: 'Invalid duration',
-        message: 'Duration must be between 1 and 720 minutes.',
-      });
+    if (isNaN(minDuration) || minDuration < 1) {
+      minDuration = 1;
+    } else if (minDuration > 720) {
+      minDuration = 720;
     }
 
     const mockTime = req.query.now || req.headers['x-mock-time'];
-    const now = mockTime ? new Date(mockTime) : new Date();
+    const now = parseMockOrNow(mockTime);
     const bypassCache = !!mockTime;
     const result = await getFreeRoomsNow({ buildingId, now, minDuration, floor, bypassCache });
+
+    // Room SSB is class-only for all batches; no open seating / free study allowed
+    result.rooms = (result.rooms || []).filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+    if (result.closed_rooms) {
+      result.closed_rooms = result.closed_rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+    }
+    if (result.next_day?.rooms) {
+      result.next_day.rooms = result.next_day.rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+    }
 
     res.json({
       query: { buildingId, minDuration, floor, timestamp: now.toISOString() },
@@ -78,6 +94,9 @@ router.get('/next-timetable', optionalAuthenticate, async (req, res) => {
 
     const dow = dayOfWeekForDateStr(date);
     const data = await getNextDayTimetableData(buildingId, date, dow, building, rooms);
+    if (data?.rooms) {
+      data.rooms = data.rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+    }
     res.json(data);
   } catch (err) {
     console.error('Next-timetable error:', err);
@@ -150,6 +169,12 @@ router.get('/free-window', optionalAuthenticate, async (req, res) => {
 
     const result = await getFreeRoomsForWindow({ buildingId, date, startTime, endTime, floor, capacity });
 
+    // Room SSB is class-only for all batches; no open seating / free study allowed
+    result.rooms = (result.rooms || []).filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+    if (result.closed_rooms) {
+      result.closed_rooms = result.closed_rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+    }
+
     res.json({
       query: { buildingId, date, startTime, endTime, floor, capacity },
       status: result.status,
@@ -174,11 +199,11 @@ router.get('/free-window', optionalAuthenticate, async (req, res) => {
  */
 router.get('/:id/timeline', optionalAuthenticate, async (req, res) => {
   try {
-    let roomId = parseInt(req.params.id, 10);
+    let roomId = /^\d+$/.test(req.params.id) ? parseInt(req.params.id, 10) : null;
     const date = req.query.date || toDateStr();
 
-    if (!Number.isInteger(roomId) || roomId < 1) {
-      const roomLookup = await query('SELECT id FROM rooms WHERE UPPER(name) = UPPER($1)', [req.params.id]);
+    if (!roomId) {
+      const roomLookup = await query('SELECT id, name FROM rooms WHERE UPPER(name) = UPPER($1)', [req.params.id]);
       if (roomLookup.rows.length > 0) {
         roomId = roomLookup.rows[0].id;
       } else {
@@ -258,10 +283,28 @@ router.get('/batches-and-groups', optionalAuthenticate, async (req, res) => {
     const batchesRes = await query('SELECT id, year FROM batches ORDER BY year DESC');
     const groupsRes = await query('SELECT id, batch_id, name FROM groups ORDER BY name ASC');
 
-    const result = batchesRes.rows.map((b) => ({
-      batchYear: b.year,
-      groups: groupsRes.rows.filter((g) => g.batch_id === b.id).map((g) => g.name),
-    }));
+    const termsRes = await query(`
+      SELECT t.id, t.batch_id, t.term_number, t.semester_number, t.start_date, t.end_date
+      FROM terms t
+      ORDER BY t.start_date DESC, t.term_number DESC
+    `);
+    const targetDate = req.query.date && isValidDateStr(req.query.date) ? req.query.date : toDateStr();
+
+    const result = batchesRes.rows.map((b) => {
+      const bTerms = termsRes.rows.filter((t) => t.batch_id === b.id);
+      const activeTerm = bTerms.find((t) => {
+        const s = toDateStr(t.start_date);
+        const e = toDateStr(t.end_date);
+        return s <= targetDate && e >= targetDate;
+      }) || bTerms[0];
+
+      return {
+        batchYear: b.year,
+        groups: groupsRes.rows.filter((g) => g.batch_id === b.id).map((g) => g.name),
+        currentTerm: activeTerm ? activeTerm.term_number : null,
+        semesterNumber: activeTerm ? activeTerm.semester_number : null,
+      };
+    });
 
     res.json({ batches: result });
   } catch (err) {
@@ -354,15 +397,15 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
       ORDER BY te.start_time ASC
     `, [term.id, dayOfWeek, date]);
 
-    // 4. Filter for group
-    const targetGroupLetter = groupName.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    // 4. Filter for group (stripping leading 'Group ' so 'Group A' matches 'A')
+    const targetGroupLetter = groupName.replace(/^Group\s*/i, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 
     const groupClasses = entriesRes.rows.filter((entry) => {
       const groups = entry.groups_list || [];
       if (groups.length === 0) return true; // Whole-batch class
 
       return groups.some((g) => {
-        const norm = g.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+        const norm = g.replace(/^Group\s*/i, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
         return norm === targetGroupLetter || norm.includes(targetGroupLetter);
       });
     });
@@ -388,44 +431,98 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
       groups: c.groups_list || [],
     }));
 
-    // 5. Compute gaps between classes
+    // 5. Compute gaps between classes and after the last class (PRD v8)
     const gaps = [];
+    const settings = await getSystemSettings();
+    const allRoomsAvailability = await getAllRoomsAvailabilityForDate(buildingId, date);
+
+    const gapWindows = [];
     for (let i = 0; i < activeClasses.length - 1; i++) {
       const currentEnd = activeClasses[i].end_time;
       const nextStart = activeClasses[i + 1].start_time;
-
       if (currentEnd < nextStart) {
-        const [cEndH, cEndM] = currentEnd.split(':').map(Number);
-        const [nStartH, nStartM] = nextStart.split(':').map(Number);
-        const durationMinutes = (nStartH * 60 + nStartM) - (cEndH * 60 + cEndM);
+        gapWindows.push({
+          start: currentEnd,
+          end: nextStart,
+          currentRoom: activeClasses[i].room_name,
+          nextClassRoom: activeClasses[i + 1].room_name,
+          isAfterLastClass: false,
+        });
+      }
+    }
 
-        if (durationMinutes >= 15) {
-          const freeRes = await getFreeRoomsForWindow({
-            buildingId,
-            date,
-            startTime: currentEnd,
-            endTime: nextStart,
-          });
+    if (activeClasses.length > 0) {
+      const lastClass = activeClasses[activeClasses.length - 1];
+      const closingTime = '22:00';
+      if (lastClass.end_time < closingTime) {
+        gapWindows.push({
+          start: lastClass.end_time,
+          end: closingTime,
+          currentRoom: lastClass.room_name,
+          nextClassRoom: null,
+          isAfterLastClass: true,
+        });
+      }
+    }
 
-          gaps.push({
-            start: currentEnd,
-            end: nextStart,
-            duration_minutes: durationMinutes,
-            free_rooms_count: freeRes.rooms?.length || 0,
-            free_rooms: (freeRes.rooms || []).map((r) => ({
-              id: r.id,
-              name: r.name,
-              floor: r.floor,
-              capacity: r.capacity,
-            })),
-            closed_rooms: (freeRes.closed_rooms || []).map((r) => ({
-              id: r.id,
-              name: r.name,
-              floor: r.floor,
-              closure_badge: r.closure_badge,
-            })),
-          });
-        }
+    for (const gw of gapWindows) {
+      const [cEndH, cEndM] = gw.start.split(':').map(Number);
+      const [nStartH, nStartM] = gw.end.split(':').map(Number);
+      const durationMinutes = (nStartH * 60 + nStartM) - (cEndH * 60 + cEndM);
+
+      if (durationMinutes >= (settings.chain_min_free_minutes || 15)) {
+        const freeRes = await getFreeRoomsForWindow({
+          buildingId,
+          date,
+          startTime: gw.start,
+          endTime: gw.end,
+        });
+
+        // Room SSB is class-only; no seating during break gaps for any batch
+        const filteredFreeRooms = (freeRes.rooms || []).filter(
+          (r) => (r.name || '').toUpperCase() !== 'SSB'
+        );
+        const filteredClosedRooms = (freeRes.closed_rooms || []).filter(
+          (r) => (r.name || '').toUpperCase() !== 'SSB'
+        );
+
+        // PRD v8: Calculate optimal room chaining plan
+        const plan = calculateGapPlan({
+          gapStart: gw.start,
+          gapEnd: gw.end,
+          currentRoom: gw.currentRoom,
+          nextClassRoom: gw.nextClassRoom,
+          rooms: allRoomsAvailability,
+          options: {
+            minFreeMinutes: settings.chain_min_free_minutes,
+            bufferMinutes: settings.buffer_minutes,
+            chainEnabled: settings.chain_enabled,
+            buildingClosingMinutes: 1320,
+          },
+        });
+
+        gaps.push({
+          start: gw.start,
+          end: gw.end,
+          duration_minutes: durationMinutes,
+          current_room: gw.currentRoom,
+          next_class_room: gw.nextClassRoom,
+          is_after_last_class: gw.isAfterLastClass,
+          plan,
+          free_rooms_count: filteredFreeRooms.length,
+          free_rooms: filteredFreeRooms.map((r) => ({
+            id: r.id,
+            name: r.name,
+            floor: r.floor,
+            capacity: r.capacity,
+          })),
+          closed_rooms: filteredClosedRooms.map((r) => ({
+            id: r.id,
+            name: r.name,
+            floor: r.floor,
+            closure_badge: r.closure_badge,
+          })),
+        });
       }
     }
 

@@ -14,12 +14,11 @@
         try {
           var saved = localStorage.getItem('freeroom_theme');
           var prefDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-          var theme = (saved === 'dark' || saved === 'darker' || saved === 'light') ? saved : (prefDark ? 'dark' : 'light');
+          var theme = (saved === 'dark' || saved === 'darker' || saved === 'light') ? (saved === 'darker' ? 'dark' : saved) : (prefDark ? 'dark' : 'light');
           document.documentElement.setAttribute('data-theme', theme);
           var m = document.querySelector('meta[name="theme-color"]');
           if (m) {
-            if (theme === 'darker') m.setAttribute('content', '#05070a');
-            else if (theme === 'dark') m.setAttribute('content', '#0d1117');
+            if (theme === 'dark') m.setAttribute('content', '#0b0c0e');
             else m.setAttribute('content', '#faf9f5');
           }
         } catch (e) {}

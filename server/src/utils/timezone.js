@@ -96,3 +96,44 @@ export function zonedTimeToUtc(dateStr, timeStr, timeZone = campusTimeZone()) {
   }
   return new Date(guess);
 }
+
+export function formatTimeInTz(date, timeZone = campusTimeZone()) {
+  if (!date || isNaN(new Date(date).getTime())) return '00:00';
+  const p = zonedParts(new Date(date), timeZone);
+  return `${pad(p.hour)}:${pad(p.minute)}`;
+}
+
+export function parseMockOrNow(mockTime) {
+  if (!mockTime) return new Date();
+  let d = new Date(mockTime);
+  if (!isNaN(d.getTime())) return d;
+
+  const str = String(mockTime).trim();
+  const todayStr = toDateStr();
+
+  // 12-hour format: "4:43 pm" or "04:43 PM"
+  const m12 = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)$/i);
+  if (m12) {
+    let hours = parseInt(m12[1], 10);
+    const mins = parseInt(m12[2], 10);
+    const secs = parseInt(m12[3] || '0', 10);
+    const meridian = m12[4].toLowerCase();
+    if (meridian === 'pm' && hours < 12) hours += 12;
+    if (meridian === 'am' && hours === 12) hours = 0;
+    const probe = zonedTimeToUtc(todayStr, `${pad(hours)}:${pad(mins)}:${pad(secs)}`);
+    if (!isNaN(probe.getTime())) return probe;
+  }
+
+  // 24-hour format: "16:43" or "16:43:00"
+  const m24 = str.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (m24) {
+    const hours = parseInt(m24[1], 10);
+    const mins = parseInt(m24[2], 10);
+    const secs = parseInt(m24[3] || '0', 10);
+    const probe = zonedTimeToUtc(todayStr, `${pad(hours)}:${pad(mins)}:${pad(secs)}`);
+    if (!isNaN(probe.getTime())) return probe;
+  }
+
+  return new Date();
+}
+

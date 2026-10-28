@@ -1,3 +1,4 @@
+import bcrypt from 'bcryptjs';
 import { Router } from 'express';
 import { OAuth2Client } from 'google-auth-library';
 import { query } from '../config/db.js';
@@ -9,18 +10,6 @@ dotenv.config();
 const router = Router();
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
-// Ensure users settings column exists (PRD v6)
-async function ensureUserSettingsColumn() {
-  try {
-    await query(`
-      ALTER TABLE users
-      ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'::jsonb;
-    `);
-  } catch (err) {
-    console.error('Failed to ensure settings column on users:', err);
-  }
-}
-ensureUserSettingsColumn();
 
 /**
  * Parse admin users and passwords configured via environment variables.
@@ -54,7 +43,7 @@ function checkIsAdminEmail(email) {
     .map(e => e.trim().toLowerCase())
     .filter(Boolean);
 
-  return adminEmails.includes(normalized) || normalized.includes('admin');
+  return adminEmails.includes(normalized);
 }
 
 /**
@@ -224,7 +213,10 @@ router.post('/admin-login', async (req, res) => {
     const envAdminUsers = getAdminUsersFromEnv();
     const expectedPassword = envAdminUsers[normalizedEmail];
 
-    if (!expectedPassword || expectedPassword !== password) {
+    const isMatch = (typeof expectedPassword === 'string' && expectedPassword.startsWith('$2'))
+      ? await bcrypt.compare(password, expectedPassword)
+      : expectedPassword === password;
+    if (!expectedPassword || !isMatch) {
       return res.status(401).json({
         error: 'Invalid credentials',
         message: 'Invalid email or password for admin portal.',
