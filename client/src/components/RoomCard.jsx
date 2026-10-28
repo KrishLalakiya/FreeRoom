@@ -26,7 +26,7 @@ function getUntilAndLeft(room) {
     const until = `until ${untilTime}`;
     const left = room.first_class
       ? `First class: ${formatTime12(room.first_class.start_time)}`
-      : `${formatDurationHoursMinutes(room.free_duration)} free`;
+      : `All day free`;
     return { until, left, isUrgent: false };
   }
 

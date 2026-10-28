@@ -7,6 +7,7 @@ import {
   doesClosureApplyToRoom,
   closureToBusyBlock,
   applyClosuresToAvailability,
+  apply2BRule,
 } from '../../src/services/availabilityEngine.js';
 
 /**
@@ -641,3 +642,32 @@ describe('enriched room timeline details (C19)', () => {
 
 
 
+
+// ── apply2BRule (PRD v5) ───────────────────────────────────
+
+describe('apply2BRule', () => {
+  it('shows 2B only and hides 2B1/2B2 when both halves are free', () => {
+    const rooms = [
+      { id: 1, name: '1A' },
+      { id: 6, name: '2B' },
+      { id: 7, name: '2B1' },
+      { id: 8, name: '2B2' },
+    ];
+    const filtered = apply2BRule(rooms);
+    const names = filtered.map((r) => r.name);
+    expect(names).toContain('1A');
+    expect(names).toContain('2B');
+    expect(names).not.toContain('2B1');
+    expect(names).not.toContain('2B2');
+  });
+
+  it('shows free half and hides 2B when only one half is free', () => {
+    const rooms = [
+      { id: 1, name: '1A' },
+      { id: 7, name: '2B1' },
+    ];
+    const filtered = apply2BRule(rooms);
+    const names = filtered.map((r) => r.name);
+    expect(names).toEqual(['1A', '2B1']);
+  });
+});

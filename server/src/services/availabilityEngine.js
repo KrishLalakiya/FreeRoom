@@ -100,7 +100,13 @@ export async function getNextDayTimetableData(buildingId, targetDate, targetDow,
       continue;
     }
 
-    const roomClasses = classes.filter((c) => c.room_id === room.id);
+    const childIds = rooms.filter((r) => r.parent_room_id === room.id).map((r) => r.id);
+    const roomClasses = classes.filter((c) => {
+      if (c.room_id === room.id) return true;
+      if (room.parent_room_id && c.room_id === room.parent_room_id) return true;
+      if (childIds.includes(c.room_id)) return true;
+      return false;
+    });
     roomClasses.sort((a, b) => a.start_time.localeCompare(b.start_time));
     const firstClass = roomClasses[0] || null;
 
@@ -147,7 +153,7 @@ export async function getNextDayTimetableData(buildingId, targetDate, targetDow,
     closing_time: closingTime,
     is_no_class_day: isNoClassDay,
     no_class_reason: noClassReason,
-    rooms: nextRooms,
+    rooms: apply2BRule(nextRooms),
     classes,
   };
 }

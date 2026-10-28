@@ -5,6 +5,7 @@ import {
   getFreeRoomsForWindow,
   getRoomTimeline,
   getNextDayTimetableData,
+  apply2BRule,
   getAllRoomsAvailabilityForDate,
 } from '../services/availabilityEngine.js';
 import { calculateGapPlan } from '../services/roomChainingEngine.js';
