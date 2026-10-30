@@ -4,14 +4,16 @@ describe('My Group Schedule and Gaps (C20, PRD Section 2)', () => {
   // Pure logic helper mirroring the my-group filtering
   function filterClassesForGroup(classes, targetGroup) {
     const targetLetter = targetGroup.replace(/^Group\s*/i, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    if (!targetLetter) return [];
 
     return classes.filter((cls) => {
       const groups = cls.groups || [];
       if (groups.length === 0) return true; // Whole-batch class
 
       return groups.some((g) => {
-        const norm = g.replace(/^Group\s*/i, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-        return norm === targetLetter || norm.includes(targetLetter);
+        const clean = g.replace(/^Group\s*/i, '').toUpperCase();
+        const tokens = clean.split(/[^A-Z0-9]+/).filter(Boolean);
+        return tokens.includes(targetLetter);
       });
     });
   }
@@ -91,16 +93,25 @@ describe('My Group Schedule and Gaps (C20, PRD Section 2)', () => {
     expect(gaps).toEqual([]);
   });
 
-  it('excludes SSB from free study rooms for all batches (class-only room, no open seating)', () => {
+  it('excludes SSB from free study rooms for all batches via room flag (PRD Item 8 & Test 7)', () => {
     const freeRooms = [
-      { id: 1, name: '1A' },
-      { id: 2, name: '2A' },
-      { id: 57, name: 'SSB' },
+      { id: 1, name: '1A', is_study_allowed: true },
+      { id: 2, name: '2A', is_study_allowed: true },
+      { id: 57, name: 'SSB', is_study_allowed: false },
     ];
     function filterGapRoomsForStudy(rooms) {
-      return rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+      return rooms.filter((r) => r.is_study_allowed !== false);
     }
 
     expect(filterGapRoomsForStudy(freeRooms).map((r) => r.name)).toEqual(['1A', '2A']);
+  });
+  it('does not match compound group AB when querying for group A (discrete matching)', () => {
+    const classes = [
+      { id: 1, subject: 'Subject 1', start_time: '09:00', end_time: '10:00', groups: ['AB'] },
+      { id: 2, subject: 'Subject 2', start_time: '10:00', end_time: '11:00', groups: ['A'] },
+      { id: 3, subject: 'Subject 3', start_time: '11:00', end_time: '12:00', groups: ['A + B'] },
+    ];
+    const filtered = filterClassesForGroup(classes, 'A');
+    expect(filtered.map((c) => c.id)).toEqual([2, 3]);
   });
 });

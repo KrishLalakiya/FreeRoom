@@ -105,10 +105,18 @@ export function formatTimeInTz(date, timeZone = campusTimeZone()) {
 
 export function parseMockOrNow(mockTime) {
   if (!mockTime) return new Date();
-  let d = new Date(mockTime);
+  const str = String(mockTime).trim();
+
+  // If ISO string without timezone indicator (e.g. "2026-10-30T14:40:00" or "2026-10-30 14:40")
+  const isoNoOffset = str.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)$/);
+  if (isoNoOffset) {
+    const probe = zonedTimeToUtc(isoNoOffset[1], isoNoOffset[2]);
+    if (!isNaN(probe.getTime())) return probe;
+  }
+
+  let d = new Date(str);
   if (!isNaN(d.getTime())) return d;
 
-  const str = String(mockTime).trim();
   const todayStr = toDateStr();
 
   // 12-hour format: "4:43 pm" or "04:43 PM"

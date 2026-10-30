@@ -16,12 +16,7 @@ export default function AdminLoginPage() {
   const [loading, setLoading] = useState(false);
   const [notAdminError, setNotAdminError] = useState(false);
 
-  // If already logged in as admin, go to /admin
-  if (user && isAdmin) {
-    return <Navigate to="/admin" replace />;
-  }
-
-  // Google OAuth for Admin
+  // Google OAuth for Admin (must run before conditional return per Rules of Hooks)
   const googleLogin = useGoogleLogin({
     onSuccess: async (tokenResponse) => {
       setLoading(true);
@@ -51,6 +46,11 @@ export default function AdminLoginPage() {
       toast.error('Google sign-in was cancelled or failed.');
     },
   });
+
+  // If already logged in as admin, go to /admin
+  if (user && isAdmin) {
+    return <Navigate to="/admin" replace />;
+  }
 
   const handleAdminPasswordLogin = async (e) => {
     if (e) e.preventDefault();

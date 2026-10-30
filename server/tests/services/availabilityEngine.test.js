@@ -62,6 +62,18 @@ describe('mergeOverlapping', () => {
     expect(merged).toHaveLength(2);
   });
 
+  it('preserves closure fields when merged with overlapping blocks (PRD v9)', () => {
+    const blocks = [
+      { start: utc('09:00'), end: utc('10:00'), title: 'Lecture' },
+      { start: utc('09:30'), end: utc('11:00'), title: 'Exam Closure', isClosure: true, reason: 'Midterm', note: 'No access' },
+    ];
+    const merged = mergeOverlapping(blocks);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].isClosure).toBe(true);
+    expect(merged[0].reason).toBe('Midterm');
+    expect(merged[0].note).toBe('No access');
+  });
+
   it('handles unordered input', () => {
     const blocks = [
       { start: utc('14:00'), end: utc('15:00'), title: 'Later' },
@@ -153,6 +165,18 @@ describe('computeFreeIntervals', () => {
     expect(free).toHaveLength(1);
     expect(free[0].start).toEqual(utc('06:00'));
     expect(free[0].end).toEqual(utc('20:00'));
+  });
+
+  it('clamps free intervals to closing time when a block extends past closing (PRD Item 16)', () => {
+    const busy = [
+      { start: utc('16:00'), end: utc('18:00') },
+      { start: utc('21:00'), end: utc('23:00') }, // runs past 22:00 closing
+    ];
+    const free = computeFreeIntervals(busy, dayStart, dayEnd);
+    expect(free).toHaveLength(2);
+    expect(free[0]).toEqual({ start: utc('06:00'), end: utc('16:00') });
+    expect(free[1]).toEqual({ start: utc('18:00'), end: utc('21:00') });
+    // No interval between 23:00 and 22:00 or after 22:00
   });
 });
 

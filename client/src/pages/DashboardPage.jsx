@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { HiChevronLeft, HiChevronRight, HiOutlineCalendar } from 'react-icons/hi';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { roomsAPI } from '../services/api';
+import { roomsAPI, DEFAULT_BUILDING_ID } from '../services/api';
 import Navbar from '../components/Navbar';
 import RoomCard from '../components/RoomCard';
 import DatePicker, { getTodayStr, getTomorrowStr } from '../components/DatePicker';
@@ -172,17 +172,23 @@ function FreeNowScreen() {
 
   const DURATION_MAP = { any: 1, '30m': 30, '1h': 60, '2h': 120 };
 
+  const [freenowError, setFreenowError] = useState(false);
+  const freenowReqIdRef = useRef(0);
+
   const fetchRooms = useCallback(async () => {
+    const reqId = ++freenowReqIdRef.current;
+    setFreenowError(false);
     setLoading(true);
     try {
       const minDuration = DURATION_MAP[durationKey] ?? 30;
       const storedBatch = user?.settings?.batch || localStorage.getItem('freeroom_student_batch');
       const storedGroup = user?.settings?.group || localStorage.getItem('freeroom_student_group');
-      const params = { buildingId: 1, minDuration };
+      const params = { buildingId: DEFAULT_BUILDING_ID, minDuration };
       if (storedBatch) params.batchYear = storedBatch;
       if (storedGroup) params.group = storedGroup;
       if (floor !== 'all') params.floor = floor;
       const res = await roomsAPI.getFreeNow(params);
+      if (reqId !== freenowReqIdRef.current) return;
       setRooms(res.data.rooms || []);
       setClosedRooms(res.data.closed_rooms || []);
       setNextDayData(res.data.next_day || null);
@@ -190,10 +196,15 @@ function FreeNowScreen() {
       const mockStr = window.__MOCK_TIME__ || localStorage.getItem('freeroom_mock_time');
       setLastUpdated(mockStr ? new Date(mockStr) : new Date());
     } catch (err) {
-      console.error('fetchRooms error:', err?.response?.data || err?.message || err);
-      toast.error('Failed to load live availability');
+      if (reqId === freenowReqIdRef.current) {
+        console.error('fetchRooms error:', err?.response?.data || err?.message || err);
+        toast.error('Failed to load live availability');
+        setFreenowError(true);
+      }
     } finally {
-      setLoading(false);
+      if (reqId === freenowReqIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [durationKey, floor]);
 
@@ -215,7 +226,7 @@ function FreeNowScreen() {
     }
     setLoadingNextDay(true);
     try {
-      const res = await roomsAPI.getNextTimetable({ date: dateStr, buildingId: 1 });
+      const res = await roomsAPI.getNextTimetable({ date: dateStr, buildingId: DEFAULT_BUILDING_ID });
       nextDayCacheRef.current[dateStr] = res.data;
       setNextDayData(res.data);
     } catch {
@@ -233,7 +244,7 @@ function FreeNowScreen() {
   const count = visibleRooms.length;
   const updatedStr = lastUpdated
     ? lastUpdated.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
-    : '4:43 pm';
+    : '--';
 
   // Filter next day classes by group
   const filteredClasses = (nextDayData?.classes || []).filter((c) => {
@@ -246,7 +257,7 @@ function FreeNowScreen() {
     );
   });
 
-  const shouldShowNextDay = (isAfterHours || allRooms.length === 0) && !!nextDayData;
+  const shouldShowNextDay = isAfterHours && !!nextDayData;
 
   return (
     <section id="screen-freenow" className="screen active">
@@ -291,7 +302,7 @@ function FreeNowScreen() {
 
       <div className="freenow-header">
         <div>
-          <h1 className="page-title">{shouldShowNextDay ? 'Next Day Timetable' : 'Free now'}</h1>
+          <h1 className="page-title">{shouldShowNextDay ? (isAfterHours ? 'All classes are over for today' : 'Next Day Timetable') : 'Free now'}</h1>
           <p className="page-subtitle" id="freenow-subtitle">
             {shouldShowNextDay ? (
               <>
@@ -342,6 +353,14 @@ function FreeNowScreen() {
         <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-secondary)' }}>
           Checking classroom availability…
         </div>
+      ) : freenowError ? (
+        <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
+          <div style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px', color: 'var(--text-primary)' }}>Failed to load live availability</div>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '13.5px', marginBottom: '16px' }}>Could not connect to the campus server.</p>
+          <button className="btn btn-primary" onClick={fetchRooms}>
+            Retry
+          </button>
+        </div>
       ) : shouldShowNextDay ? (
         /* ── NEXT DAY TIMETABLE VIEW (AFTER LAST CLASS / AFTER HOURS) ── */
         <div className="fade-in">
@@ -372,7 +391,7 @@ function FreeNowScreen() {
                 </div>
                 <div>
                   <div style={{ fontSize: '17px', fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--text-primary)' }}>
-                    {isAfterHours ? 'All classes finished for today' : 'No classrooms free right now'}
+                    {isAfterHours ? 'All classes are over for today' : 'No classrooms free right now'}
                   </div>
                   <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '2px' }}>
                     Campus operating hours are {formatTime12(nextDayData?.opening_time) || '6:00 am'} – {formatTime12(nextDayData?.closing_time) || '10:00 pm'}
@@ -641,7 +660,10 @@ function FindRoomScreen() {
     if (toTime) localStorage.setItem('freeroom_find_to', toTime);
     if (floor) localStorage.setItem('freeroom_find_floor', floor);
     if (user && updateSettings) {
-      updateSettings({ lastDateWindow: { date, fromTime, toTime } });
+      const last = user.settings?.lastDateWindow;
+      if (last?.date !== date || last?.fromTime !== fromTime || last?.toTime !== toTime) {
+        updateSettings({ lastDateWindow: { date, fromTime, toTime } });
+      }
     }
   }, [date, fromTime, toTime, floor, user, updateSettings]);
 
@@ -666,24 +688,37 @@ function FindRoomScreen() {
     setSearchParams(nextParams);
   };
 
+  const [freeRoomsError, setFreeRoomsError] = useState(false);
+  const [timelineError, setTimelineError] = useState(false);
+  const freeRoomsReqIdRef = useRef(0);
+  const timelineReqIdRef = useRef(0);
+
   // Perform search for Free rooms mode
   const fetchFreeRooms = useCallback(async () => {
+    setFreeRoomsError(false);
     if (fromTime >= toTime) {
       toast.error('Start time must be earlier than end time');
       return;
     }
+    const reqId = ++freeRoomsReqIdRef.current;
     setLoadingFree(true);
     try {
-      const params = { buildingId: 1, date, startTime: fromTime, endTime: toTime };
+      const params = { buildingId: DEFAULT_BUILDING_ID, date, startTime: fromTime, endTime: toTime };
       if (floor !== 'all') params.floor = floor;
       const res = await roomsAPI.getFreeWindow(params);
+      if (reqId !== freeRoomsReqIdRef.current) return;
       setRooms(res.data.rooms || []);
       setClosedRooms(res.data.closed_rooms || []);
       setSearchReason(res.data.reason || null);
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Search failed');
+      if (reqId === freeRoomsReqIdRef.current) {
+        toast.error(err.response?.data?.message || 'Search failed');
+        setFreeRoomsError(true);
+      }
     } finally {
-      setLoadingFree(false);
+      if (reqId === freeRoomsReqIdRef.current) {
+        setLoadingFree(false);
+      }
     }
   }, [date, fromTime, toTime, floor]);
 
@@ -695,14 +730,22 @@ function FindRoomScreen() {
 
   // Fetch timeline for By room mode
   const fetchTimeline = useCallback(async () => {
+    const reqId = ++timelineReqIdRef.current;
+    setTimelineError(false);
     setLoadingTimeline(true);
     try {
       const res = await roomsAPI.getTimeline(selectedRoom, date);
+      if (reqId !== timelineReqIdRef.current) return;
       setTimelineData(res.data);
     } catch (err) {
-      toast.error(err.response?.data?.message || `Failed to load schedule for Room ${selectedRoom}`);
+      if (reqId === timelineReqIdRef.current) {
+        toast.error(err.response?.data?.message || `Failed to load schedule for Room ${selectedRoom}`);
+        setTimelineError(true);
+      }
     } finally {
-      setLoadingTimeline(false);
+      if (reqId === timelineReqIdRef.current) {
+        setLoadingTimeline(false);
+      }
     }
   }, [selectedRoom, date]);
 
@@ -764,7 +807,7 @@ function FindRoomScreen() {
         return;
       }
 
-      const batch = bb.batch_year ? `Batch ${bb.batch_year}` : 'Batch 2029';
+      const batch = bb.batch_year ? `Batch ${bb.batch_year}` : '';
       const group = bb.group || (bb.groups_list && bb.groups_list[0]) || '';
       const subject = bb.subject_name || bb.title || '';
       const teacher = bb.instructor_name || bb.teacher || '';
@@ -924,6 +967,14 @@ function FindRoomScreen() {
                 <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-secondary)' }}>
                   Checking classroom availability…
                 </div>
+              ) : freeRoomsError ? (
+                <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px', color: 'var(--text-primary)' }}>Failed to load rooms</div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '16px' }}>Could not check room availability for this window.</p>
+                  <button className="btn btn-primary" onClick={fetchFreeRooms}>
+                    Retry
+                  </button>
+                </div>
               ) : allRooms.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
                   <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>
@@ -961,6 +1012,14 @@ function FindRoomScreen() {
               {loadingTimeline ? (
                 <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-secondary)' }}>
                   Loading schedule for Room {selectedRoom}…
+                </div>
+              ) : timelineError ? (
+                <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px', color: 'var(--text-primary)' }}>Failed to load room schedule</div>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '16px' }}>Could not fetch schedule for Room {selectedRoom}.</p>
+                  <button className="btn btn-primary" onClick={fetchTimeline}>
+                    Retry
+                  </button>
                 </div>
               ) : timelineSlots.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
@@ -1469,28 +1528,39 @@ function MyGroupScreen() {
   };
 
   const scheduleCacheRef = useRef({});
+  const [scheduleError, setScheduleError] = useState(false);
+  const scheduleReqIdRef = useRef(0);
 
-  const fetchSchedule = useCallback(async (d) => {
+  const fetchSchedule = useCallback(async (d, force = false) => {
     if (!hasPicked) return;
     const cacheKey = `${batch}-${group}-${d}`;
-    if (scheduleCacheRef.current[cacheKey]) {
-      setSchedule(scheduleCacheRef.current[cacheKey]);
+    const cached = scheduleCacheRef.current[cacheKey];
+    const now = Date.now();
+    if (!force && cached && (now - cached.timestamp < 60000)) {
+      setSchedule(cached.data);
       return;
     }
+    const reqId = ++scheduleReqIdRef.current;
     setLoading(true);
     try {
       const res = await roomsAPI.getMyGroup({
         batchYear: batch,
         group,
         date: d,
-        buildingId: 1,
+        buildingId: DEFAULT_BUILDING_ID,
       });
-      scheduleCacheRef.current[cacheKey] = res.data;
+      if (reqId !== scheduleReqIdRef.current) return;
+      scheduleCacheRef.current[cacheKey] = { data: res.data, timestamp: Date.now() };
       setSchedule(res.data);
     } catch {
-      toast.error('Failed to load group schedule');
+      if (reqId === scheduleReqIdRef.current) {
+        toast.error('Failed to load group schedule');
+        setScheduleError(true);
+      }
     } finally {
-      setLoading(false);
+      if (reqId === scheduleReqIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [batch, group, hasPicked]);
 
@@ -1499,6 +1569,16 @@ function MyGroupScreen() {
       fetchSchedule(selectedDay);
     }
   }, [fetchSchedule, selectedDay, hasPicked]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && hasPicked && selectedDay) {
+        fetchSchedule(selectedDay, true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [fetchSchedule, hasPicked, selectedDay]);
 
   const dateHeading = (() => {
     if (!selectedDay) return '';
@@ -1615,6 +1695,14 @@ function MyGroupScreen() {
           ) : loading ? (
             <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-secondary)' }}>
               Loading schedule…
+            </div>
+          ) : scheduleError ? (
+            <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>
+              <div style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px', color: 'var(--text-primary)' }}>Failed to load group schedule</div>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '13.5px', marginBottom: '16px' }}>Could not fetch schedule for this day.</p>
+              <button className="btn btn-primary" onClick={() => fetchSchedule(selectedDay)}>
+                Retry
+              </button>
             </div>
           ) : !schedule ? null : schedule.is_no_class_day ? (
             <div style={{ textAlign: 'center', padding: '48px 16px', background: 'var(--bg-card)', borderRadius: 'var(--radius-card)', border: '1px solid var(--border-subtle)' }}>

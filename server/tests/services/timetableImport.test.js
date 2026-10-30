@@ -249,4 +249,9 @@ describe('Sheet differences handling (C21)', () => {
     expect(parsed.subject).toBe('DSA');
     expect(parsed.roomName).toBeNull();
   });
+  it('extracts date from raw cell text if present', () => {
+    const raw = 'MERN - 2029 2026-10-30\nGrp A\n(Mrinal)\nClassroom A 1st floor';
+    const parsed = parseClassCell(raw);
+    expect(parsed.date).toBe('2026-10-30');
+  });
 });

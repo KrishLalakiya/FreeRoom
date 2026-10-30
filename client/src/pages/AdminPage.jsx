@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { adminAPI, roomsAPI } from '../services/api';
+import { adminAPI, roomsAPI, DEFAULT_BUILDING_ID } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import {
@@ -34,28 +34,7 @@ function AdminNavbar() {
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
-    const handleSaveSettings = async (e) => {
-    e.preventDefault();
-    setSavingSettings(true);
-    try {
-      const res = await adminAPI.updateSettings({
-        chain_min_free_minutes: parseInt(chainMinFree, 10),
-        chain_enabled: chainEnabled,
-      });
-      if (res.data?.settings) {
-        setChainMinFree(res.data.settings.chain_min_free_minutes);
-        setChainEnabled(res.data.settings.chain_enabled);
-      }
-      toast.success('Room chaining settings saved');
-      await refreshActionLogs();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to save settings');
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
-  return () => document.removeEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   const initials = user?.name
@@ -217,6 +196,17 @@ function ActionLogCard({ logs }) {
   );
 }
 
+function getCampusDateStr(d = new Date()) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
+  } catch {
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+}
+
 export default function AdminPage() {
   const { user, isAdmin } = useAuth();
   const navigate = useNavigate();
@@ -240,7 +230,7 @@ export default function AdminPage() {
 
   // Cancel Class Form State
   const [cancelEntryId, setCancelEntryId] = useState('');
-  const [cancelDate, setCancelDate] = useState(new Date().toISOString().split('T')[0]);
+  const [cancelDate, setCancelDate] = useState(getCampusDateStr());
   const [cancelReason, setCancelReason] = useState('');
   const [cancellingClass, setCancellingClass] = useState(false);
 
@@ -276,8 +266,8 @@ export default function AdminPage() {
   const [closureScope, setClosureScope] = useState('room');
   const [closureRoomId, setClosureRoomId] = useState('');
   const [closureFloor, setClosureFloor] = useState('Ground');
-  const [closureStartDate, setClosureStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [closureEndDate, setClosureEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [closureStartDate, setClosureStartDate] = useState(getCampusDateStr());
+  const [closureEndDate, setClosureEndDate] = useState(getCampusDateStr());
   const [closureIsWholeDay, setClosureIsWholeDay] = useState(true);
   const [closureStartTime, setClosureStartTime] = useState('09:00');
   const [closureEndTime, setClosureEndTime] = useState('13:00');
@@ -287,7 +277,7 @@ export default function AdminPage() {
 
   // No-class days state (C12)
   const [noClassDays, setNoClassDays] = useState([]);
-  const [newNoClassDate, setNewNoClassDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newNoClassDate, setNewNoClassDate] = useState(getCampusDateStr());
   const [newNoClassReason, setNewNoClassReason] = useState('Holiday / Break');
   const [savingNoClassDay, setSavingNoClassDay] = useState(false);
 
@@ -316,7 +306,7 @@ export default function AdminPage() {
   const loadInitialData = async () => {
     setLoading(true);
     try {
-      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes, closuresRes, noClassRes, logsRes] = await Promise.all([
+      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes, closuresRes, noClassRes, logsRes, settingsRes] = await Promise.all([
         roomsAPI.list(1),
         adminAPI.getEvents(),
         adminAPI.getTimetable(),
@@ -325,6 +315,7 @@ export default function AdminPage() {
         adminAPI.getClosures(),
         adminAPI.getNoClassDays(),
         adminAPI.getActionLogs(),
+        adminAPI.getSettings(),
       ]);
 
       const rList = roomsRes.data.rooms || [];
@@ -341,6 +332,11 @@ export default function AdminPage() {
       setNoClassDays(noClassRes.data.noClassDays || []);
       setTerms(termsRes.data.terms || []);
       setActionLogs(logsRes.data.actions || []);
+      if (settingsRes.data?.settings) {
+        setChainMinFree(settingsRes.data.settings.chain_min_free_minutes ?? 15);
+        setChainEnabled(settingsRes.data.settings.chain_enabled ?? true);
+        setBufferMins(settingsRes.data.settings.buffer_minutes ?? 0);
+      }
     } catch (err) {
       console.error('Failed to load admin data:', err);
       toast.error('Failed to load admin data');
@@ -396,7 +392,7 @@ export default function AdminPage() {
     try {
       await adminAPI.deleteEvent(eventId);
       toast.success('Event deleted');
-      setEvents(events.filter((ev) => ev.id !== eventId));
+      setEvents((prev) => prev.filter((ev) => ev.id !== eventId));
       await refreshActionLogs();
     } catch (err) {
       console.error('Failed to delete event:', err);
@@ -515,7 +511,7 @@ export default function AdminPage() {
 
     const formData = new FormData();
     formData.append('file', importFile);
-    formData.append('buildingId', '1');
+    formData.append('buildingId', String(DEFAULT_BUILDING_ID));
     formData.append('termId', selectedTermId);
     formData.append('saveValidRowsOnly', saveValidRowsOnly ? 'true' : 'false');
 
@@ -568,7 +564,7 @@ export default function AdminPage() {
   const handleDeleteAlias = async (aliasId) => {
     try {
       await adminAPI.deleteRoomAlias(aliasId);
-      setAliases(aliases.filter((a) => a.id !== aliasId));
+      setAliases((prev) => prev.filter((a) => a.id !== aliasId));
       toast.success('Alias deleted');
       await refreshActionLogs();
     } catch (err) {
@@ -683,6 +679,29 @@ export default function AdminPage() {
     } catch (err) {
       console.error('Failed to delete no-class day:', err);
       toast.error('Failed to delete no-class day');
+    }
+  };
+
+  const handleSaveSettings = async (e) => {
+    e.preventDefault();
+    setSavingSettings(true);
+    try {
+      const res = await adminAPI.updateSettings({
+        chain_min_free_minutes: parseInt(chainMinFree, 10),
+        chain_enabled: chainEnabled,
+        buffer_minutes: parseInt(bufferMins, 10),
+      });
+      if (res.data?.settings) {
+        setChainMinFree(res.data.settings.chain_min_free_minutes ?? 15);
+        setChainEnabled(res.data.settings.chain_enabled ?? true);
+        setBufferMins(res.data.settings.buffer_minutes ?? 0);
+      }
+      toast.success('Room chaining settings saved');
+      await refreshActionLogs();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to save settings');
+    } finally {
+      setSavingSettings(false);
     }
   };
 
@@ -1109,7 +1128,7 @@ export default function AdminPage() {
                     <option value="">Choose batch and term</option>
                     {terms
                       .filter((t) => {
-                        const todayStr = new Date().toISOString().split('T')[0];
+                        const todayStr = getCampusDateStr();
                         const endStr = String(t.end_date).slice(0, 10);
                         return endStr >= todayStr;
                       })
@@ -1786,6 +1805,81 @@ export default function AdminPage() {
                 )}
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Tab 6: Room Chaining & System Settings (PRD v8) ────── */}
+      {activeTab === 'settings' && (
+        <div className="admin-grid fade-in">
+          <div className="admin-card">
+            <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <HiOutlineClock size={20} style={{ color: 'var(--accent-primary)' }} />
+              Room Chaining & Gap Settings
+            </h2>
+            <p className="section-subtitle" style={{ marginBottom: 16 }}>
+              Configure student gap recommendations, minimum free duration, and transition buffers.
+            </p>
+
+            <form onSubmit={handleSaveSettings}>
+              <div className="input-group" style={{ marginBottom: 16 }}>
+                <label className="checkbox-label" style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={chainEnabled}
+                    onChange={(e) => setChainEnabled(e.target.checked)}
+                    style={{ width: 18, height: 18, accentColor: 'var(--accent-primary)' }}
+                  />
+                  <span>Enable Room Chaining (Break Gaps)</span>
+                </label>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: 4, marginLeft: 28 }}>
+                  When enabled, My Group suggests staying in the previous room or moving between rooms during breaks.
+                </div>
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Minimum Free Duration (X Minutes)</label>
+                <input
+                  type="number"
+                  className="input-field"
+                  min="5"
+                  max="120"
+                  step="5"
+                  value={chainMinFree}
+                  onChange={(e) => setChainMinFree(e.target.value)}
+                  required
+                />
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                  Gaps shorter than this duration will not generate chaining plans (default: 15 min).
+                </div>
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Buffer Minutes (Before / After Class)</label>
+                <input
+                  type="number"
+                  className="input-field"
+                  min="0"
+                  max="60"
+                  step="5"
+                  value={bufferMins}
+                  onChange={(e) => setBufferMins(e.target.value)}
+                  required
+                />
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: 4 }}>
+                  Extra safety margin added to busy class intervals (default: 0 min).
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="btn btn-primary btn-full"
+                disabled={savingSettings}
+                style={{ marginTop: 8 }}
+              >
+                {savingSettings ? 'Saving settings...' : 'Save Settings'}
+              </button>
+            </form>
           </div>
         </div>
       )}

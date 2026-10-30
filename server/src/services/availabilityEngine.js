@@ -30,8 +30,8 @@ const BUFFER_MINUTES = parseInt(process.env.BUFFER_MINUTES || '0', 10);
 /**
  * Compute next day's full timetable and morning room availability.
  */
-export async function getNextDayTimetableData(buildingId, targetDate, targetDow, building, rooms, bypassCache = false) {
-  const cacheKey = `next_day_tt:${buildingId}:${targetDate}`;
+export async function getNextDayTimetableData(buildingId, targetDate, targetDow, building, rooms, bypassCache = false, floor = null) {
+  const cacheKey = `next_day_tt:${buildingId}:${targetDate}:${floor || 'all'}`;
   if (!bypassCache) {
     const cached = availabilityCache.get(cacheKey);
     if (cached) return structuredClone(cached);
@@ -44,6 +44,7 @@ export async function getNextDayTimetableData(buildingId, targetDate, targetDow,
     weekday: 'short',
     day: 'numeric',
     month: 'short',
+    timeZone: 'UTC',
   });
 
   const noClassRes = await query(
@@ -55,10 +56,11 @@ export async function getNextDayTimetableData(buildingId, targetDate, targetDow,
 
   const buildingClosure = await getActiveBuildingClosure(buildingId, targetDate, null);
 
-  const classesRes = await query(`
+  const classesRes = isNoClassDay ? { rows: [] } : await query(`
     SELECT te.id, te.room_id, r.name as room_name, r.floor, r.capacity,
            te.course_name, te.teacher, te.start_time, te.end_time, te.entry_type,
-           g.name as group_name, b.year as batch_year
+           STRING_AGG(DISTINCT g.name, ', ' ORDER BY g.name) as group_name,
+           b.year as batch_year
     FROM timetable_entries te
     JOIN rooms r ON te.room_id = r.id
     LEFT JOIN timetable_entry_groups teg ON te.id = teg.timetable_entry_id
@@ -67,8 +69,12 @@ export async function getNextDayTimetableData(buildingId, targetDate, targetDow,
     LEFT JOIN batches b ON t.batch_id = b.id
     WHERE r.building_id = $1
       AND te.day_of_week = $2
-      AND te.valid_from <= $3
-      AND te.valid_to >= $3
+      AND (
+        (te.term_id IS NOT NULL AND t.start_date <= $3 AND t.end_date >= $3)
+        OR
+        (te.term_id IS NULL AND te.valid_from <= $3 AND te.valid_to >= $3)
+      )
+    GROUP BY te.id, te.room_id, r.name, r.floor, r.capacity, te.course_name, te.teacher, te.start_time, te.end_time, te.entry_type, b.year
     ORDER BY te.start_time, r.name
   `, [buildingId, targetDow, targetDate]);
 
@@ -225,15 +231,19 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
   const dayEnd = zonedTimeToUtc(dateStr, building.closing_time || '22:00');
   const isClosedHours = (now < dayStart || now >= dayEnd);
 
-  // Check last class of today
+  // Check last class of today (term model per PRD v9)
   const todayLastClassRes = await query(`
     SELECT MAX(te.end_time) as max_end
     FROM timetable_entries te
     JOIN rooms r ON te.room_id = r.id
+    LEFT JOIN terms t ON te.term_id = t.id
     WHERE r.building_id = $1
       AND te.day_of_week = $2
-      AND te.valid_from <= $3
-      AND te.valid_to >= $3
+      AND (
+        (te.term_id IS NOT NULL AND t.start_date <= $3 AND t.end_date >= $3)
+        OR
+        (te.term_id IS NULL AND te.valid_from <= $3 AND te.valid_to >= $3)
+      )
   `, [buildingId, dayOfWeek, dateStr]);
 
   const maxEndStr = todayLastClassRes.rows[0]?.max_end;
@@ -245,12 +255,14 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
     }
   }
 
-  // Determine next class day
-  let nextDateStr = dateStr;
-  if (now >= dayEnd || isAfterLastClass) {
-    nextDateStr = addDaysToDateStr(dateStr, 1);
-  } else if (now < dayStart) {
+  // Determine next class day (PRD v9: real next campus day)
+  let nextDateStr;
+  if (now < dayStart) {
+    // Before campus opens, the upcoming schedule is today
     nextDateStr = dateStr;
+  } else {
+    // Once campus is open (or after closing / after last class), next day is tomorrow
+    nextDateStr = addDaysToDateStr(dateStr, 1);
   }
   let nextDow = dayOfWeekForDateStr(nextDateStr);
   if (nextDow === 0) {
@@ -259,7 +271,7 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
   }
 
   if (isClosedHours) {
-    const nextDay = await getNextDayTimetableData(buildingId, nextDateStr, nextDow, building, rooms);
+    const nextDay = await getNextDayTimetableData(buildingId, nextDateStr, nextDow, building, rooms, bypassCache, floor);
     const buildingClosedResult = {
       status: 'building_closed',
       reason: `Building is currently closed. Operating hours are ${String(building.opening_time || '06:00').slice(0, 5)} to ${String(building.closing_time || '22:00').slice(0, 5)}.`,
@@ -360,10 +372,7 @@ export async function getFreeRoomsNow({ buildingId, now = new Date(), minDuratio
       String(a.name).localeCompare(String(b.name))
   );
 
-  const nextDay = await getNextDayTimetableData(buildingId, nextDateStr, nextDow, building, rooms);
-  if (nextDay && nextDay.rooms) {
-    nextDay.rooms = apply2BRule(nextDay.rooms);
-  }
+  const nextDay = await getNextDayTimetableData(buildingId, nextDateStr, nextDow, building, rooms, bypassCache, floor);
   const dedupedResults = apply2BRule(results);
 
   if (isAfterLastClass) {
@@ -534,7 +543,11 @@ export async function getFreeRoomsForWindow({ buildingId, date, startTime, endTi
  * Get a single room's full-day availability with timeline.
  */
 export async function getRoomTimeline(roomId, date, { bypassCache = false } = {}) {
-  const cacheKey = `timeline:${roomId}:${date}`;
+  const isToday = date === toDateStr();
+  const minuteBucket = isToday ? Math.floor(Date.now() / 60000) : 0;
+  const cacheKey = isToday
+    ? `timeline:${roomId}:${date}:${minuteBucket}`
+    : `timeline:${roomId}:${date}`;
   if (!bypassCache) {
     const cached = availabilityCache.get(cacheKey);
     if (cached) return structuredClone(cached);
@@ -565,7 +578,6 @@ export async function getRoomTimeline(roomId, date, { bypassCache = false } = {}
     return { ...base, status: 'unknown', reason: 'Outside academic term: no timetable data' };
   }
 
-  const isToday = date === toDateStr();
   const now = isToday ? new Date() : null;
   const availability = await computeRoomAvailability(
     room,
@@ -879,7 +891,14 @@ export function mergeOverlapping(blocks) {
     if (curr.start <= last.end) {
       if (curr.end > last.end) {
         last.end = curr.end;
-        last.title = `${last.title} / ${curr.title}`;
+      }
+      last.title = `${last.title} / ${curr.title}`;
+      if (curr.isClosure || last.isClosure) {
+        last.isClosure = true;
+        last.reason = last.reason || curr.reason;
+        last.note = last.note || curr.note;
+        last.scope = last.scope || curr.scope;
+        last.isWholeDay = last.isWholeDay || curr.isWholeDay;
       }
     } else {
       merged.push({ ...curr });
@@ -899,7 +918,11 @@ export function computeFreeIntervals(busyBlocks, dayStart, dayEnd) {
 
   for (const block of busyBlocks) {
     if (block.start > cursor) {
-      free.push({ start: new Date(cursor), end: new Date(block.start) });
+      const freeStart = cursor < dayStart ? dayStart : cursor;
+      const freeEnd = block.start > dayEnd ? dayEnd : block.start;
+      if (freeStart < freeEnd && freeStart < dayEnd) {
+        free.push({ start: new Date(freeStart), end: new Date(freeEnd) });
+      }
     }
     if (block.end > cursor) {
       cursor = new Date(block.end);
@@ -907,7 +930,10 @@ export function computeFreeIntervals(busyBlocks, dayStart, dayEnd) {
   }
 
   if (cursor < dayEnd) {
-    free.push({ start: new Date(cursor), end: new Date(dayEnd) });
+    const freeStart = cursor < dayStart ? dayStart : cursor;
+    if (freeStart < dayEnd) {
+      free.push({ start: new Date(freeStart), end: new Date(dayEnd) });
+    }
   }
 
   return free;
@@ -1250,6 +1276,7 @@ async function getRooms(buildingId, floor = null, capacity = null) {
     FROM rooms r
     JOIN buildings b ON r.building_id = b.id
     WHERE r.building_id = $1
+      AND r.is_study_allowed IS NOT FALSE
   `;
   const params = [buildingId];
 

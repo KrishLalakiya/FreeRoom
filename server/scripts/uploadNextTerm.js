@@ -19,7 +19,7 @@ import dotenv from 'dotenv';
 import { getClient, query } from '../src/config/db.js';
 import { importTimetable } from '../src/services/timetableImport.js';
 import { clearAvailabilityCache } from '../src/services/cache.js';
-import { isValidDateStr } from '../src/utils/timezone.js';
+import { isValidDateStr, toDateStr } from '../src/utils/timezone.js';
 
 dotenv.config();
 
@@ -79,9 +79,14 @@ async function main() {
     let batchRes = await client.query('SELECT id FROM batches WHERE year = $1', [options.batchYear]);
     let batchId;
     if (batchRes.rows.length === 0) {
-      const newBatch = await client.query('INSERT INTO batches (year) VALUES ($1) RETURNING id', [options.batchYear]);
-      batchId = newBatch.rows[0].id;
-      console.log(`✨ Created new batch: Year ${options.batchYear} (ID: ${batchId})`);
+      if (options.dryRun) {
+        batchId = 999999;
+        console.log(`🔍 [DRY RUN] Would create new batch: Year ${options.batchYear}`);
+      } else {
+        const newBatch = await client.query('INSERT INTO batches (year) VALUES ($1) RETURNING id', [options.batchYear]);
+        batchId = newBatch.rows[0].id;
+        console.log(`✨ Created new batch: Year ${options.batchYear} (ID: ${batchId})`);
+      }
     } else {
       batchId = batchRes.rows[0].id;
       console.log(`✔️ Using existing batch: Year ${options.batchYear} (ID: ${batchId})`);
@@ -91,8 +96,8 @@ async function main() {
     let termRes = await client.query('SELECT * FROM terms WHERE batch_id = $1 AND term_number = $2', [batchId, options.termNumber]);
     let termId;
 
-    const startDate = options.startDate || (termRes.rows[0]?.start_date ? termRes.rows[0].start_date.toISOString().slice(0, 10) : '2026-10-29');
-    const endDate = options.endDate || (termRes.rows[0]?.end_date ? termRes.rows[0].end_date.toISOString().slice(0, 10) : '2027-01-31');
+    const startDate = options.startDate || (termRes.rows[0]?.start_date ? toDateStr(termRes.rows[0].start_date) : '2026-10-29');
+    const endDate = options.endDate || (termRes.rows[0]?.end_date ? toDateStr(termRes.rows[0].end_date) : '2027-01-31');
     const semesterNumber = options.semesterNumber || termRes.rows[0]?.semester_number || 1;
 
     if (!isValidDateStr(startDate) || !isValidDateStr(endDate)) {
@@ -100,21 +105,30 @@ async function main() {
     }
 
     if (termRes.rows.length === 0) {
-      const newTerm = await client.query(`
-        INSERT INTO terms (batch_id, semester_number, term_number, start_date, end_date)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id
-      `, [batchId, semesterNumber, options.termNumber, startDate, endDate]);
-      termId = newTerm.rows[0].id;
-      console.log(`✨ Created new term: Term ${options.termNumber} (${startDate} to ${endDate}) (ID: ${termId})`);
+      if (options.dryRun) {
+        termId = 999999;
+        console.log(`🔍 [DRY RUN] Would create new term: Term ${options.termNumber} (${startDate} to ${endDate})`);
+      } else {
+        const newTerm = await client.query(`
+          INSERT INTO terms (batch_id, semester_number, term_number, start_date, end_date)
+          VALUES ($1, $2, $3, $4, $5)
+          RETURNING id
+        `, [batchId, semesterNumber, options.termNumber, startDate, endDate]);
+        termId = newTerm.rows[0].id;
+        console.log(`✨ Created new term: Term ${options.termNumber} (${startDate} to ${endDate}) (ID: ${termId})`);
+      }
     } else {
       termId = termRes.rows[0].id;
-      await client.query(`
-        UPDATE terms
-        SET semester_number = $1, start_date = $2, end_date = $3
-        WHERE id = $4
-      `, [semesterNumber, startDate, endDate, termId]);
-      console.log(`✔️ Updated term: Term ${options.termNumber} (${startDate} to ${endDate}) (ID: ${termId})`);
+      if (options.dryRun) {
+        console.log(`🔍 [DRY RUN] Would update term: Term ${options.termNumber} (${startDate} to ${endDate}) (ID: ${termId})`);
+      } else {
+        await client.query(`
+          UPDATE terms
+          SET semester_number = $1, start_date = $2, end_date = $3
+          WHERE id = $4
+        `, [semesterNumber, startDate, endDate, termId]);
+        console.log(`✔️ Updated term: Term ${options.termNumber} (${startDate} to ${endDate}) (ID: ${termId})`);
+      }
     }
 
     // 3. Import Timetable

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { query } from '../config/db.js';
+import { query, getClient } from '../config/db.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { importTimetable } from '../services/timetableImport.js';
 import { isValidDateStr, toDateStr } from '../utils/timezone.js';
@@ -104,32 +104,47 @@ router.post('/events', async (req, res) => {
       });
     }
 
-    // Check for clashes
-    const clashRes = await query(`
-      SELECT id, title FROM events
-      WHERE room_id = $1
-        AND start_at < $3
-        AND end_at > $2
-    `, [roomId, start, end]);
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+      // Lock room to prevent double-booking race condition (PRD v9 item 17)
+      await client.query('SELECT id FROM rooms WHERE id = $1 FOR UPDATE', [roomId]);
 
-    if (clashRes.rows.length > 0) {
-      return res.status(409).json({
-        error: 'Time clash',
-        message: `Clashes with event: "${clashRes.rows[0].title}"`,
-        clashing: clashRes.rows,
-      });
+      // Check for clashes
+      const clashRes = await client.query(`
+        SELECT id, title FROM events
+        WHERE room_id = $1
+          AND start_at < $3
+          AND end_at > $2
+      `, [roomId, start, end]);
+
+      if (clashRes.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          error: 'Time clash',
+          message: `Clashes with event: "${clashRes.rows[0].title}"`,
+          clashing: clashRes.rows,
+        });
+      }
+
+      const result = await client.query(`
+        INSERT INTO events (room_id, title, start_at, end_at, created_by)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *;
+      `, [roomId, title, start, end, req.user.id]);
+
+      await client.query('COMMIT');
+
+      clearAvailabilityCache({ roomId });
+      await logAdminAction(req, 'create_event', `Created one-off event "${title}" in Room #${roomId}`, { roomId, title, startAt, endAt });
+
+      res.status(201).json({ event: result.rows[0] });
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
     }
-
-    const result = await query(`
-      INSERT INTO events (room_id, title, start_at, end_at, created_by)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *;
-    `, [roomId, title, start, end, req.user.id]);
-
-    clearAvailabilityCache({ roomId });
-    await logAdminAction(req, 'create_event', `Created one-off event "${title}" in Room #${roomId}`, { roomId, title, startAt, endAt });
-
-    res.status(201).json({ event: result.rows[0] });
   } catch (err) {
     console.error('Create event error:', err);
     res.status(500).json({ error: 'Failed to create event' });
@@ -265,59 +280,73 @@ router.post('/terms', async (req, res) => {
     const semNum = parseInt(semesterNumber, 10);
     const tNum = parseInt(termNumber, 10);
 
-    // Upsert or find batch
-    let batchRes = await query('SELECT id FROM batches WHERE year = $1', [bYear]);
-    let batchId;
-    if (batchRes.rows.length === 0) {
-      const newBatch = await query('INSERT INTO batches (year) VALUES ($1) RETURNING id', [bYear]);
-      batchId = newBatch.rows[0].id;
-    } else {
-      batchId = batchRes.rows[0].id;
-    }
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
 
-    // Check duplicate term number for this batch
-    const dupRes = await query('SELECT id FROM terms WHERE batch_id = $1 AND term_number = $2', [batchId, tNum]);
-    if (dupRes.rows.length > 0) {
-      return res.status(409).json({
-        error: 'Duplicate term',
-        message: `Term ${tNum} already exists for Batch ${bYear}.`,
+      // Upsert or find batch (lock batch to prevent orphan batch on failure, PRD v9 item 18 & 22)
+      let batchRes = await client.query('SELECT id FROM batches WHERE year = $1 FOR UPDATE', [bYear]);
+      let batchId;
+      if (batchRes.rows.length === 0) {
+        const newBatch = await client.query('INSERT INTO batches (year) VALUES ($1) RETURNING id', [bYear]);
+        batchId = newBatch.rows[0].id;
+      } else {
+        batchId = batchRes.rows[0].id;
+      }
+
+      // Check duplicate term number for this batch
+      const dupRes = await client.query('SELECT id FROM terms WHERE batch_id = $1 AND term_number = $2', [batchId, tNum]);
+      if (dupRes.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          error: 'Duplicate term',
+          message: `Term ${tNum} already exists for Batch ${bYear}.`,
+        });
+      }
+
+      // Check same-batch date overlap (C11 rule: terms of same batch cannot overlap)
+      const overlapRes = await client.query(`
+        SELECT id, term_number, start_date, end_date
+        FROM terms
+        WHERE batch_id = $1
+          AND start_date <= $3
+          AND end_date >= $2
+      `, [batchId, startDate, endDate]);
+
+      if (overlapRes.rows.length > 0) {
+        await client.query('ROLLBACK');
+        const clash = overlapRes.rows[0];
+        const startStr = clash.start_date instanceof Date ? toDateStr(clash.start_date) : String(clash.start_date).slice(0, 10);
+        const endStr = clash.end_date instanceof Date ? toDateStr(clash.end_date) : String(clash.end_date).slice(0, 10);
+        return res.status(409).json({
+          error: 'Overlapping term',
+          message: `Term dates overlap with Term ${clash.term_number} (${startStr} to ${endStr}) for Batch ${bYear}.`,
+        });
+      }
+
+      const result = await client.query(`
+        INSERT INTO terms (batch_id, semester_number, term_number, start_date, end_date)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING *
+      `, [batchId, semNum, tNum, startDate, endDate]);
+
+      await client.query('COMMIT');
+
+      clearAvailabilityCache();
+      await logAdminAction(req, 'create_term', `Added Term ${tNum} (Batch ${bYear}) from ${startDate} to ${endDate}`, req.body);
+
+      res.status(201).json({
+        term: {
+          ...result.rows[0],
+          batch_year: bYear,
+        },
       });
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
     }
-
-    // Check same-batch date overlap (C11 rule: terms of same batch cannot overlap)
-    const overlapRes = await query(`
-      SELECT id, term_number, start_date, end_date
-      FROM terms
-      WHERE batch_id = $1
-        AND start_date <= $3
-        AND end_date >= $2
-    `, [batchId, startDate, endDate]);
-
-    if (overlapRes.rows.length > 0) {
-      const clash = overlapRes.rows[0];
-      const startStr = clash.start_date instanceof Date ? toDateStr(clash.start_date) : String(clash.start_date).slice(0, 10);
-      const endStr = clash.end_date instanceof Date ? toDateStr(clash.end_date) : String(clash.end_date).slice(0, 10);
-      return res.status(409).json({
-        error: 'Overlapping term',
-        message: `Term dates overlap with Term ${clash.term_number} (${startStr} to ${endStr}) for Batch ${bYear}.`,
-      });
-    }
-
-    const result = await query(`
-      INSERT INTO terms (batch_id, semester_number, term_number, start_date, end_date)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING *
-    `, [batchId, semNum, tNum, startDate, endDate]);
-
-    clearAvailabilityCache();
-    await logAdminAction(req, 'create_term', `Added Term ${tNum} (Batch ${bYear}) from ${startDate} to ${endDate}`, req.body);
-
-    res.status(201).json({
-      term: {
-        ...result.rows[0],
-        batch_year: bYear,
-      },
-    });
   } catch (err) {
     console.error('Create term error:', err);
     res.status(500).json({ error: 'Failed to create term' });
@@ -339,8 +368,9 @@ router.put('/terms/:id', async (req, res) => {
     }
     const current = existingRes.rows[0];
 
-    const sDate = startDate || current.start_date;
-    const eDate = endDate || current.end_date;
+    // PRD v9 item 20: use toDateStr to prevent Date objects from failing isValidDateStr
+    const sDate = startDate || toDateStr(current.start_date);
+    const eDate = endDate || toDateStr(current.end_date);
     const semNum = semesterNumber !== undefined ? parseInt(semesterNumber, 10) : current.semester_number;
     const tNum = termNumber !== undefined ? parseInt(termNumber, 10) : current.term_number;
 
@@ -358,49 +388,63 @@ router.put('/terms/:id', async (req, res) => {
       });
     }
 
-    // Check duplicate term number for this batch (excluding this term)
-    const dupRes = await query(
-      'SELECT id FROM terms WHERE batch_id = $1 AND term_number = $2 AND id != $3',
-      [current.batch_id, tNum, termId]
-    );
-    if (dupRes.rows.length > 0) {
-      return res.status(409).json({
-        error: 'Duplicate term',
-        message: `Term ${tNum} already exists for this batch.`,
-      });
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
+
+      // Check duplicate term number for this batch (excluding this term)
+      const dupRes = await client.query(
+        'SELECT id FROM terms WHERE batch_id = $1 AND term_number = $2 AND id != $3',
+        [current.batch_id, tNum, termId]
+      );
+      if (dupRes.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({
+          error: 'Duplicate term',
+          message: `Term ${tNum} already exists for this batch.`,
+        });
+      }
+
+      // Check same-batch date overlap (C11 rule: terms of same batch cannot overlap)
+      const overlapRes = await client.query(`
+        SELECT id, term_number, start_date, end_date
+        FROM terms
+        WHERE batch_id = $1
+          AND id != $4
+          AND start_date <= $3
+          AND end_date >= $2
+      `, [current.batch_id, sDate, eDate, termId]);
+
+      if (overlapRes.rows.length > 0) {
+        await client.query('ROLLBACK');
+        const clash = overlapRes.rows[0];
+        const startStr = clash.start_date instanceof Date ? toDateStr(clash.start_date) : String(clash.start_date).slice(0, 10);
+        const endStr = clash.end_date instanceof Date ? toDateStr(clash.end_date) : String(clash.end_date).slice(0, 10);
+        return res.status(409).json({
+          error: 'Overlapping term',
+          message: `Term dates overlap with Term ${clash.term_number} (${startStr} to ${endStr}).`,
+        });
+      }
+
+      const result = await client.query(`
+        UPDATE terms
+        SET semester_number = $1, term_number = $2, start_date = $3, end_date = $4
+        WHERE id = $5
+        RETURNING *
+      `, [semNum, tNum, sDate, eDate, termId]);
+
+      await client.query('COMMIT');
+
+      clearAvailabilityCache();
+      await logAdminAction(req, 'update_term', `Updated Term #${termId} (Term ${tNum}) dates to ${sDate} – ${eDate}`, req.body);
+
+      res.json({ term: result.rows[0] });
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
     }
-
-    // Check same-batch date overlap (C11 rule: terms of same batch cannot overlap)
-    const overlapRes = await query(`
-      SELECT id, term_number, start_date, end_date
-      FROM terms
-      WHERE batch_id = $1
-        AND id != $4
-        AND start_date <= $3
-        AND end_date >= $2
-    `, [current.batch_id, sDate, eDate, termId]);
-
-    if (overlapRes.rows.length > 0) {
-      const clash = overlapRes.rows[0];
-      const startStr = clash.start_date instanceof Date ? toDateStr(clash.start_date) : String(clash.start_date).slice(0, 10);
-      const endStr = clash.end_date instanceof Date ? toDateStr(clash.end_date) : String(clash.end_date).slice(0, 10);
-      return res.status(409).json({
-        error: 'Overlapping term',
-        message: `Term dates overlap with Term ${clash.term_number} (${startStr} to ${endStr}).`,
-      });
-    }
-
-    const result = await query(`
-      UPDATE terms
-      SET semester_number = $1, term_number = $2, start_date = $3, end_date = $4
-      WHERE id = $5
-      RETURNING *
-    `, [semNum, tNum, sDate, eDate, termId]);
-
-    clearAvailabilityCache();
-    await logAdminAction(req, 'update_term', `Updated Term #${termId} (Term ${tNum}) dates to ${sDate} – ${eDate}`, req.body);
-
-    res.json({ term: result.rows[0] });
   } catch (err) {
     console.error('Update term error:', err);
     res.status(500).json({ error: 'Failed to update term' });
@@ -442,7 +486,12 @@ router.get('/timetable', async (req, res) => {
         roomId = parseInt(req.query.roomId, 10);
       } else {
         const lookup = await query('SELECT id FROM rooms WHERE UPPER(name) = UPPER($1)', [req.query.roomId]);
-        if (lookup.rows.length > 0) roomId = lookup.rows[0].id;
+        if (lookup.rows.length > 0) {
+          roomId = lookup.rows[0].id;
+        } else {
+          // PRD v9 item 21: Unknown room must return empty array, not full timetable
+          return res.json({ entries: [] });
+        }
       }
     }
     const termId = req.query.termId ? parseInt(req.query.termId, 10) : null;
@@ -473,8 +522,13 @@ router.get('/timetable', async (req, res) => {
 
     sql += ' ORDER BY te.day_of_week, te.start_time';
 
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 1000);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    sql += ` LIMIT ${params.length + 1} OFFSET ${params.length + 2}`;
+    params.push(limit, offset);
+
     const result = await query(sql, params);
-    res.json({ entries: result.rows });
+    res.json({ entries: result.rows, limit, offset });
   } catch (err) {
     console.error('Timetable list error:', err);
     res.status(500).json({ error: 'Failed to fetch timetable' });
@@ -487,14 +541,18 @@ router.get('/timetable', async (req, res) => {
  */
 router.get('/events', async (req, res) => {
   try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 500);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
     const result = await query(`
       SELECT e.*, r.name as room_name, r.floor
       FROM events e
       JOIN rooms r ON e.room_id = r.id
       WHERE e.end_at > NOW()
       ORDER BY e.start_at
-    `);
-    res.json({ events: result.rows });
+      LIMIT $1 OFFSET $2
+    `, [limit, offset]);
+    res.json({ events: result.rows, limit, offset });
   } catch (err) {
     console.error('Events list error:', err);
     res.status(500).json({ error: 'Failed to fetch events' });
@@ -608,6 +666,7 @@ router.post('/timetable/import', upload.single('file'), async (req, res) => {
       validFrom,
       validTo,
       saveValidRowsOnly,
+      replace: req.body.replace === 'true' || req.body.replace === true,
     });
 
     if (report.committed) {
@@ -855,96 +914,114 @@ router.post('/closures', async (req, res) => {
       warning = 'Closure is scheduled in the past. Recorded for historical accuracy.';
     }
 
-    // Merge check (C11: "Overlapping closures are merged, not stored twice")
-    const existingRes = await query(
-      `SELECT * FROM closures
-       WHERE scope = $1
-         AND (
-           ($1 = 'building' AND (building_id IS NULL OR building_id = $2))
-           OR ($1 = 'floor' AND LOWER(TRIM(floor)) = LOWER(TRIM($3)))
-           OR ($1 = 'room' AND room_id = $4)
-         )
-         AND start_date <= $6
-         AND end_date >= $5`,
-      [scope, resolvedBuildingId, finalFloor, parsedRoomId, startDate, finalEndDate]
-    );
+    const client = await getClient();
+    try {
+      await client.query('BEGIN');
 
-    // Check time overlap
-    const overlapping = existingRes.rows.filter((c) => {
-      if (!c.start_time && !finalStartTime) return true;
-      if (!c.start_time || !finalStartTime) return true;
-      const cStart = String(c.start_time).slice(0, 5);
-      const cEnd = String(c.end_time).slice(0, 5);
-      return cStart < finalEndTime && cEnd > finalStartTime;
-    });
-
-    if (overlapping.length > 0) {
-      const target = overlapping[0];
-      const mergedStart = target.start_date < startDate ? target.start_date : startDate;
-      const mergedEnd = target.end_date > finalEndDate ? target.end_date : finalEndDate;
-      let mergedStartTime = target.start_time;
-      let mergedEndTime = target.end_time;
-
-      if (!target.start_time || !finalStartTime) {
-        mergedStartTime = null;
-        mergedEndTime = null;
-      } else {
-        const tStart = String(target.start_time).slice(0, 5);
-        const tEnd = String(target.end_time).slice(0, 5);
-        mergedStartTime = tStart < finalStartTime ? tStart : finalStartTime;
-        mergedEndTime = tEnd > finalEndTime ? tEnd : finalEndTime;
-      }
-
-      const mergedNote = [target.note, note].filter(Boolean).join('; ');
-
-      const updateRes = await query(
-        `UPDATE closures
-         SET start_date = $1, end_date = $2, start_time = $3, end_time = $4,
-             reason = COALESCE($5, reason), note = $6
-         WHERE id = $7
-         RETURNING *`,
-        [mergedStart, mergedEnd, mergedStartTime, mergedEndTime, reason.trim() || target.reason, mergedNote || null, target.id]
+      // Merge check (C11: "Overlapping closures are merged, not stored twice", PRD v9 item 19 & 22)
+      const existingRes = await client.query(
+        `SELECT * FROM closures
+         WHERE scope = $1
+           AND (
+             ($1 = 'building' AND (building_id IS NULL OR building_id = $2))
+             OR ($1 = 'floor' AND LOWER(TRIM(floor)) = LOWER(TRIM($3)))
+             OR ($1 = 'room' AND room_id = $4)
+           )
+           AND start_date <= $6
+           AND end_date >= $5
+         FOR UPDATE`,
+        [scope, resolvedBuildingId, finalFloor, parsedRoomId, startDate, finalEndDate]
       );
 
-      clearAvailabilityCache({ roomId: parsedRoomId, buildingId: resolvedBuildingId });
+      // Check time overlap
+      const overlapping = existingRes.rows.filter((c) => {
+        if (!c.start_time && !finalStartTime) return true;
+        if (!c.start_time || !finalStartTime) return true;
+        const cStart = String(c.start_time).slice(0, 5);
+        const cEnd = String(c.end_time).slice(0, 5);
+        return cStart < finalEndTime && cEnd > finalStartTime;
+      });
 
-      return res.status(200).json({
-        closure: updateRes.rows[0],
-        merged: true,
-        message: 'Merged with existing overlapping closure.',
+      if (overlapping.length > 0) {
+        const target = overlapping[0];
+        // PRD v9 item 19: target.start_date is a Date object, convert with toDateStr so string comparison works
+        const targetStartStr = toDateStr(target.start_date);
+        const targetEndStr = toDateStr(target.end_date);
+        const mergedStart = targetStartStr < startDate ? targetStartStr : startDate;
+        const mergedEnd = targetEndStr > finalEndDate ? targetEndStr : finalEndDate;
+        let mergedStartTime = target.start_time;
+        let mergedEndTime = target.end_time;
+
+        if (!target.start_time || !finalStartTime) {
+          mergedStartTime = null;
+          mergedEndTime = null;
+        } else {
+          const tStart = String(target.start_time).slice(0, 5);
+          const tEnd = String(target.end_time).slice(0, 5);
+          mergedStartTime = tStart < finalStartTime ? tStart : finalStartTime;
+          mergedEndTime = tEnd > finalEndTime ? tEnd : finalEndTime;
+        }
+
+        const mergedNote = [target.note, note].filter(Boolean).join('; ');
+
+        const updateRes = await client.query(
+          `UPDATE closures
+           SET start_date = $1, end_date = $2, start_time = $3, end_time = $4,
+               reason = COALESCE($5, reason), note = $6
+           WHERE id = $7
+           RETURNING *`,
+          [mergedStart, mergedEnd, mergedStartTime, mergedEndTime, reason.trim() || target.reason, mergedNote || null, target.id]
+        );
+
+        await client.query('COMMIT');
+
+        clearAvailabilityCache();
+
+        return res.status(200).json({
+          closure: updateRes.rows[0],
+          merged: true,
+          message: 'Merged with existing overlapping closure.',
+          warning,
+        });
+      }
+
+      // Insert new closure
+      const insertRes = await client.query(
+        `INSERT INTO closures
+           (scope, building_id, room_id, floor, start_date, end_date, start_time, end_time, reason, note, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         RETURNING *`,
+        [
+          scope,
+          resolvedBuildingId,
+          parsedRoomId,
+          finalFloor,
+          startDate,
+          finalEndDate,
+          finalStartTime,
+          finalEndTime,
+          reason.trim() || 'Exam',
+          note ? note.trim() : null,
+          req.user.id,
+        ]
+      );
+
+      await client.query('COMMIT');
+
+      clearAvailabilityCache();
+      await logAdminAction(req, 'create_closure', `Created ${scope} closure: ${reason.trim() || 'Exam'} (${startDate} to ${finalEndDate})`, req.body);
+
+      res.status(201).json({
+        closure: insertRes.rows[0],
+        merged: false,
         warning,
       });
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
     }
-
-    // Insert new closure
-    const insertRes = await query(
-      `INSERT INTO closures
-         (scope, building_id, room_id, floor, start_date, end_date, start_time, end_time, reason, note, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING *`,
-      [
-        scope,
-        resolvedBuildingId,
-        parsedRoomId,
-        finalFloor,
-        startDate,
-        finalEndDate,
-        finalStartTime,
-        finalEndTime,
-        reason.trim() || 'Exam',
-        note ? note.trim() : null,
-        req.user.id,
-      ]
-    );
-
-    clearAvailabilityCache({ roomId: parsedRoomId, buildingId: resolvedBuildingId });
-    await logAdminAction(req, 'create_closure', `Created ${scope} closure: ${reason.trim() || 'Exam'} (${startDate} to ${finalEndDate})`, req.body);
-
-    res.status(201).json({
-      closure: insertRes.rows[0],
-      merged: false,
-      warning,
-    });
   } catch (err) {
     console.error('Closure creation error:', err);
     res.status(500).json({ error: 'Failed to create closure' });

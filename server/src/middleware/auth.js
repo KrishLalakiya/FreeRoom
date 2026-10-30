@@ -88,7 +88,11 @@ export async function requireAdmin(req, res, next) {
     req.user.role = currentRole;
     next();
   } catch (err) {
-    next();
+    console.error('requireAdmin database error:', err);
+    return res.status(500).json({
+      error: 'Authorization error',
+      message: 'Could not verify admin permissions.',
+    });
   }
 }
 

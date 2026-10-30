@@ -1,11 +1,14 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { getClient } from './db.js';
 import migrate from './migrate.js';
 import { importTimetable } from '../services/timetableImport.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Seed the database with pilot building data.
@@ -47,7 +50,7 @@ async function seed() {
     const room2B = await upsertRoom(client, buildingId, '2B', '2nd', 200);
     const room2B1 = await upsertRoom(client, buildingId, '2B1', '2nd', 100, room2B);
     const room2B2 = await upsertRoom(client, buildingId, '2B2', '2nd', 100, room2B);
-    const roomSSB = await upsertRoom(client, buildingId, 'SSB', 'Ground', 200);
+    const roomSSB = await upsertRoom(client, buildingId, 'SSB', 'Ground', 200, null, false);
 
     // ── Room aliases ───────────────────────────────────────
     const aliases = [
@@ -102,11 +105,11 @@ async function seed() {
     const batch2030 = await upsertBatch(client, 2030);
 
     // ── Terms per Academic Calendar (PRD v7) ──────────────
-    // Term I (Aug to 24 Oct 2026)
-    const term13 = await upsertTerm(client, batch2027, 7, 13, '2026-08-01', '2026-10-24');
-    const term5 = await upsertTerm(client, batch2029, 3, 5, '2026-08-01', '2026-10-24');
-    const term9 = await upsertTerm(client, batch2028, 5, 9, '2026-08-01', '2026-10-24');
-    const term1_2030 = await upsertTerm(client, batch2030, 1, 1, '2026-08-06', '2026-10-24');
+    // Term I (10 Aug to 24 Oct 2026 per Academic Calendar and PRD v9)
+    const term13 = await upsertTerm(client, batch2027, 7, 13, '2026-08-10', '2026-10-24');
+    const term5 = await upsertTerm(client, batch2029, 3, 5, '2026-08-10', '2026-10-24');
+    const term9 = await upsertTerm(client, batch2028, 5, 9, '2026-08-10', '2026-10-24');
+    const term1_2030 = await upsertTerm(client, batch2030, 1, 1, '2026-08-10', '2026-10-24');
 
     // Term II (29 Oct 2026 to 31 Jan 2027) - Urgent PRD v7
     const term14 = await upsertTerm(client, batch2027, 7, 14, '2026-10-29', '2027-01-31');
@@ -166,11 +169,16 @@ async function seed() {
       { start: '2027-06-25', end: '2027-06-30', reason: 'End-term IV Exams (Tentative)' },
     ];
     for (const c of closuresToSeed) {
-      await client.query(`
-        INSERT INTO closures (building_id, scope, start_date, end_date, reason)
-        VALUES ($1, 'everyone', $2, $3, $4)
-        ON CONFLICT DO NOTHING;
+      const existing = await client.query(`
+        SELECT id FROM closures
+        WHERE building_id = $1 AND scope = 'building' AND start_date = $2 AND end_date = $3 AND reason = $4
       `, [buildingId, c.start, c.end, c.reason]);
+      if (existing.rows.length === 0) {
+        await client.query(`
+          INSERT INTO closures (building_id, scope, start_date, end_date, reason)
+          VALUES ($1, 'building', $2, $3, $4)
+        `, [buildingId, c.start, c.end, c.reason]);
+      }
     }
 
     // ── No-Class Days (PRD v7 Section 3) ───────────────────
@@ -197,15 +205,34 @@ async function seed() {
       `, [buildingId, h]);
     }
 
-    // ── Clear timetable entries (v1 hardcoded entries) ────
-    const entryCheck = await client.query('SELECT COUNT(*) as cnt FROM timetable_entries;');
-    const hasEntries = parseInt(entryCheck.rows[0].cnt, 10) > 0;
-    if (process.env.FORCE_SEED === 'true' || !hasEntries) {
-      await client.query('DELETE FROM timetable_entries;');
+    // ── Clear timetable entries for seeded terms (PRD v9 item 23) ────
+    const seededTermIdsRes = await client.query(`
+      SELECT t.id FROM terms t
+      JOIN batches b ON t.batch_id = b.id
+      WHERE (b.year = 2029 AND t.term_number IN (5, 6))
+         OR (b.year = 2028 AND t.term_number IN (9, 10))
+         OR (b.year = 2030 AND t.term_number IN (1, 2));
+    `);
+    const seededTermIds = seededTermIdsRes.rows.map((r) => r.id);
+    if (process.env.FORCE_SEED === 'true') {
+      if (seededTermIds.length > 0) {
+        await client.query(`
+          DELETE FROM timetable_entries
+          WHERE term_id = ANY($1::int[]) OR term_id IS NULL;
+        `, [seededTermIds]);
+      } else {
+        await client.query('DELETE FROM timetable_entries;');
+      }
+    } else {
+      const entryCheck = await client.query('SELECT COUNT(*) as cnt FROM timetable_entries;');
+      const hasEntries = parseInt(entryCheck.rows[0].cnt, 10) > 0;
+      if (!hasEntries) {
+        await client.query('DELETE FROM timetable_entries;');
+      }
     }
 
     // ── Create a dev admin user (Development only per PRD v7 Section 5 Item 4) ──
-    if (process.env.NODE_ENV !== 'production') {
+    if (process.env.NODE_ENV === 'development') {
       await client.query(`
         INSERT INTO users (email, name, role)
         VALUES ('admin@freeroom.dev', 'Dev Admin', 'admin')
@@ -293,16 +320,17 @@ async function seed() {
 
 // ── Helper functions ──────────────────────────────────────
 
-async function upsertRoom(client, buildingId, name, floor, capacity, parentRoomId = null) {
+async function upsertRoom(client, buildingId, name, floor, capacity, parentRoomId = null, isStudyAllowed = true) {
   const res = await client.query(`
-    INSERT INTO rooms (building_id, name, floor, capacity, parent_room_id)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO rooms (building_id, name, floor, capacity, parent_room_id, is_study_allowed)
+    VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT (building_id, name) DO UPDATE SET
       floor = EXCLUDED.floor,
       capacity = EXCLUDED.capacity,
-      parent_room_id = EXCLUDED.parent_room_id
+      parent_room_id = EXCLUDED.parent_room_id,
+      is_study_allowed = EXCLUDED.is_study_allowed
     RETURNING id;
-  `, [buildingId, name, floor, capacity, parentRoomId]);
+  `, [buildingId, name, floor, capacity, parentRoomId, isStudyAllowed]);
   return res.rows[0].id;
 }
 

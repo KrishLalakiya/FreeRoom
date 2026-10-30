@@ -18,29 +18,18 @@ const PORT = process.env.PORT || 5000;
 
 // CORS
 const allowedOrigins = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  'http://localhost:4173',
-  'http://127.0.0.1:4173',
   process.env.CLIENT_URL,
-].filter(Boolean);
+  ...(process.env.NODE_ENV !== 'production' ? ['http://localhost:5173', 'http://127.0.0.1:5173'] : []),
+].filter(Boolean).map((o) => o.replace(/\/$/, ''));
+
+// This project's own Vercel preview URLs only. Adjust the name if it differs.
+const previewPattern = /^https:\/\/freeroom-[a-z0-9-]+\.vercel\.app$/;
 
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    const cleanOrigin = origin.replace(/\/$/, '');
-    if (
-      process.env.NODE_ENV === 'development' ||
-      allowedOrigins.some((o) => o && o.replace(/\/$/, '') === cleanOrigin) ||
-      cleanOrigin.includes('localhost') ||
-      cleanOrigin.includes('127.0.0.1') ||
-      (cleanOrigin.endsWith('.vercel.app') && process.env.NODE_ENV === 'development')
-    ) {
-      return callback(null, true);
-    }
-    return callback(new Error(`Not allowed by CORS: ${origin}`));
+    const clean = origin.replace(/\/$/, '');
+    return callback(null, allowedOrigins.includes(clean) || previewPattern.test(clean));
   },
   credentials: true,
 }));
@@ -64,6 +53,9 @@ const apiLimiter = rateLimit({
 
 // ── Routes ────────────────────────────────────────────────
 
+app.use('/api/auth/login', loginLimiter);
+app.use('/api/auth/admin-login', loginLimiter);
+app.use('/api/auth/google', loginLimiter);
 app.use('/api/auth', apiLimiter, authRoutes);
 app.use('/api/rooms', apiLimiter, roomRoutes);
 app.use('/api/reports', apiLimiter, reportRoutes);
@@ -126,6 +118,10 @@ async function startServer() {
       await migrate();
     } catch (err) {
       console.error('⚠️ Database migration error on startup:', err.message || err);
+      if (process.env.NODE_ENV === 'production') {
+        console.error('FATAL: Aborting server startup due to migration failure in production.');
+        process.exit(1);
+      }
     }
   }
 

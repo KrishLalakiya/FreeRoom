@@ -115,6 +115,9 @@ export function parseClassCell(raw) {
   const rawTrimmed = raw.trim();
   if (!rawTrimmed || isIgnoredCell(rawTrimmed)) return null;
 
+  const dateMatch = rawTrimmed.match(/\b(202[0-9]-[01][0-9]-[0-3][0-9])\b/);
+  const cellDate = dateMatch ? dateMatch[1] : null;
+
   // Standalone lab cell (including L&D track lab cells)
   if (/^lab$/i.test(rawTrimmed) || /^l&d\s+classroom\s+\d+\s*-\s*.*lab$/i.test(rawTrimmed)) {
     const labSubject = rawTrimmed
@@ -132,6 +135,7 @@ export function parseClassCell(raw) {
       teacher: null,
       roomName: null,
       entryType: 'lab',
+      ...(cellDate ? { date: cellDate } : {}),
     };
   }
 
@@ -208,6 +212,7 @@ export function parseClassCell(raw) {
       teacher,
       roomName,
       entryType: isClub ? 'club' : (isLab ? 'lab' : 'class'),
+      ...(cellDate ? { date: cellDate } : {}),
     };
   }
 
@@ -264,6 +269,7 @@ export function parseClassCell(raw) {
     teacher,
     roomName,
     entryType: isClub ? 'club' : (isLab ? 'lab' : 'class'),
+    ...(cellDate ? { date: cellDate } : {}),
   };
 }
 
@@ -410,7 +416,10 @@ export function parseTimetableWorkbook(buffer) {
   const workbook = XLSX.read(buf, { type: 'buffer', cellDates: false });
 
   const candidates = [];
-  for (const name of workbook.SheetNames) {
+  const safeSheetNames = (workbook.SheetNames || []).filter(
+    (name) => name !== '__proto__' && name !== 'constructor' && name !== 'prototype'
+  );
+  for (const name of safeSheetNames) {
     if (IGNORED_SHEET.test(name)) continue;
     const sheet = workbook.Sheets[name];
     const probe = buildGrid(sheet);
@@ -601,6 +610,7 @@ export function parseTimetableWorkbook(buffer) {
           groups: explicitGroups,
           roomName: parsed.roomName,
           entryType: parsed.entryType || 'class',
+          date: parsed.date || null,
           raw: String(value),
         };
 
@@ -847,6 +857,9 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
     let termStart = null;
     let termEnd = null;
     if (termId) {
+      if (options.replace) {
+        await client.query('DELETE FROM timetable_entries WHERE term_id = $1', [termId]);
+      }
       const termRes = await client.query(
         `SELECT t.batch_id, b.year as batch_year, t.start_date, t.end_date
          FROM terms t
@@ -1001,8 +1014,20 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
 
       const key = timetableKey(candidate);
       const existingDuplicate = existing.some((row) => timetableKey(row) === key);
-      const uploadDuplicate = accepted.some((row) => timetableKey(row) === key);
-      if (existingDuplicate || uploadDuplicate) {
+      const matchingAccepted = accepted.find((row) => timetableKey(row) === key);
+      if (existingDuplicate || matchingAccepted) {
+        if (matchingAccepted) {
+          const currentGroups = matchingAccepted.groups || (matchingAccepted.group ? [matchingAccepted.group] : []);
+          const incomingGroups = cls.groups?.length > 0 ? cls.groups : (cls.group ? [cls.group] : []);
+          const merged = Array.from(new Set([...currentGroups, ...incomingGroups].filter(Boolean)));
+          matchingAccepted.groups = merged;
+          if (!matchingAccepted.group && merged.length > 0) {
+            matchingAccepted.group = merged[0];
+          }
+          if (merged.length > 1) {
+            matchingAccepted.group_name = merged.join(' + ');
+          }
+        }
         duplicates += 1;
         continue;
       }
@@ -1198,7 +1223,7 @@ export async function importTimetable(fileOrOptions, maybeOptions = {}) {
           row.end,
           row.course_name,
           row.teacher_name,
-          row.group_name,
+          (Array.isArray(row.groups) && row.groups.length > 1 ? row.groups.join(' + ') : (row.group_name || (Array.isArray(row.groups) && row.groups[0]) || null)),
           validFrom,
           validTo,
           row.raw_cell,

@@ -111,6 +111,9 @@ export default function DatePicker({
   const monthTouchStartX = useRef(null);
   const monthTouchStartTime = useRef(null);
   const lastMonthSwipeTime = useRef(0);
+  const lastWheelTime = useRef(0);
+  const wheelAccumulator = useRef(0);
+  const wheelTimeout = useRef(null);
 
   const handleMonthTouchStart = (e) => {
     if (e.touches && e.touches[0]) {

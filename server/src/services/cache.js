@@ -78,11 +78,7 @@ export class AvailabilityCache {
 export const availabilityCache = new AvailabilityCache();
 
 export function clearAvailabilityCache(options = {}) {
-  if (options && options.roomId && !options.all) {
-    availabilityCache.invalidateRoom(options.roomId);
-  } else if (options && options.buildingId && !options.all) {
-    availabilityCache.invalidateBuilding(options.buildingId);
-  } else {
-    availabilityCache.clear();
-  }
+  // PRD v9 Item 2 & Batch 6: Clear every cached key on a schedule change.
+  // Writes are rare; partial invalidation missed next_day_tt:, all_rooms_avail:, my_group:, batches_and_groups:.
+  availabilityCache.clear();
 }

@@ -40,18 +40,19 @@ router.get('/free-now', optionalAuthenticate, async (req, res) => {
       minDuration = 720;
     }
 
-    const mockTime = req.query.now || req.headers['x-mock-time'];
+    const isUserAdmin = req.user && req.user.role === 'admin';
+    const mockTime = isUserAdmin ? (req.query.now || req.headers['x-mock-time']) : null;
     const now = parseMockOrNow(mockTime);
     const bypassCache = !!mockTime;
     const result = await getFreeRoomsNow({ buildingId, now, minDuration, floor, bypassCache });
 
-    // Room SSB is class-only for all batches; no open seating / free study allowed
-    result.rooms = (result.rooms || []).filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+    // Room flag: hide class-only rooms from free study (PRD Item 8 & Test 7)
+    result.rooms = (result.rooms || []).filter((r) => r.is_study_allowed !== false);
     if (result.closed_rooms) {
-      result.closed_rooms = result.closed_rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+      result.closed_rooms = result.closed_rooms.filter((r) => r.is_study_allowed !== false);
     }
     if (result.next_day?.rooms) {
-      result.next_day.rooms = result.next_day.rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+      result.next_day.rooms = result.next_day.rooms.filter((r) => r.is_study_allowed !== false);
     }
 
     res.json({
@@ -97,7 +98,7 @@ router.get('/next-timetable', optionalAuthenticate, async (req, res) => {
     const dow = dayOfWeekForDateStr(date);
     const data = await getNextDayTimetableData(buildingId, date, dow, building, rooms);
     if (data?.rooms) {
-      data.rooms = data.rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+      data.rooms = data.rooms.filter((r) => r.is_study_allowed !== false);
     }
     res.json(data);
   } catch (err) {
@@ -171,10 +172,10 @@ router.get('/free-window', optionalAuthenticate, async (req, res) => {
 
     const result = await getFreeRoomsForWindow({ buildingId, date, startTime, endTime, floor, capacity });
 
-    // Room SSB is class-only for all batches; no open seating / free study allowed
-    result.rooms = (result.rooms || []).filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+    // Room flag: hide class-only rooms from free study (PRD Item 8 & Test 7)
+    result.rooms = (result.rooms || []).filter((r) => r.is_study_allowed !== false);
     if (result.closed_rooms) {
-      result.closed_rooms = result.closed_rooms.filter((r) => (r.name || '').toUpperCase() !== 'SSB');
+      result.closed_rooms = result.closed_rooms.filter((r) => r.is_study_allowed !== false);
     }
 
     res.json({
@@ -296,7 +297,6 @@ router.get('/batches-and-groups', optionalAuthenticate, async (req, res) => {
       FROM terms t
       ORDER BY t.start_date DESC, t.term_number DESC
     `);
-    const targetDate = req.query.date && isValidDateStr(req.query.date) ? req.query.date : toDateStr();
 
     const result = batchesRes.rows.map((b) => {
       const bTerms = termsRes.rows.filter((t) => t.batch_id === b.id);
@@ -407,22 +407,29 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
       LEFT JOIN groups g ON teg.group_id = g.id
       WHERE te.term_id = $1
         AND te.day_of_week = $2
-        AND te.valid_from <= $3
-        AND te.valid_to >= $3
+        AND (te.valid_from IS NULL OR te.valid_from <= $3)
+        AND (te.valid_to IS NULL OR te.valid_to >= $3)
       GROUP BY te.id, r.name, r.floor, r.capacity, s.name, s.short_code, i.name
       ORDER BY te.start_time ASC
     `, [term.id, dayOfWeek, date]);
 
     // 4. Filter for group (stripping leading 'Group ' so 'Group A' matches 'A')
     const targetGroupLetter = groupName.replace(/^Group\s*/i, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    if (!targetGroupLetter) {
+      return res.status(400).json({
+        error: 'Invalid group',
+        message: 'A valid non-empty group identifier is required.',
+      });
+    }
 
     const groupClasses = entriesRes.rows.filter((entry) => {
       const groups = entry.groups_list || [];
       if (groups.length === 0) return true; // Whole-batch class
 
       return groups.some((g) => {
-        const norm = g.replace(/^Group\s*/i, '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-        return norm === targetGroupLetter || norm.includes(targetGroupLetter);
+        const clean = g.replace(/^Group\s*/i, '').toUpperCase();
+        const tokens = clean.split(/[^A-Z0-9]+/).filter(Boolean);
+        return tokens.includes(targetGroupLetter);
       });
     });
 
@@ -494,12 +501,12 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
           endTime: gw.end,
         });
 
-        // Room SSB is class-only; no seating during break gaps for any batch
+        // Room flag: hide class-only rooms from free study (PRD Item 8 & Test 7)
         const filteredFreeRooms = (freeRes.rooms || []).filter(
-          (r) => (r.name || '').toUpperCase() !== 'SSB'
+          (r) => r.is_study_allowed !== false
         );
         const filteredClosedRooms = (freeRes.closed_rooms || []).filter(
-          (r) => (r.name || '').toUpperCase() !== 'SSB'
+          (r) => r.is_study_allowed !== false
         );
 
         // PRD v8: Calculate optimal room chaining plan

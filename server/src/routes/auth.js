@@ -16,7 +16,6 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
  * Format in .env: ADMIN_USERS=email1:pass1,email2:pass2
  */
 function getAdminUsersFromEnv() {
-  dotenv.config({ override: true });
   const users = {};
   const raw = process.env.ADMIN_USERS || '';
   for (const entry of raw.split(',')) {
@@ -64,6 +63,19 @@ router.post('/google', async (req, res) => {
     let payload;
 
     if (accessToken) {
+      // Verify token audience to prevent cross-app token reuse (Item 30)
+      const tokenInfoRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`);
+      if (!tokenInfoRes.ok) {
+        throw new Error('Could not verify Google account with Google Identity Services');
+      }
+      const tokenInfo = await tokenInfoRes.json();
+      if (process.env.GOOGLE_CLIENT_ID && tokenInfo.aud !== process.env.GOOGLE_CLIENT_ID) {
+        return res.status(401).json({
+          error: 'Invalid token audience',
+          message: 'Access token was not issued for this application.',
+        });
+      }
+
       // Fetch user profile directly from Google Identity using access token
       const googleRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -105,11 +117,7 @@ router.post('/google', async (req, res) => {
         name = EXCLUDED.name,
         google_id = EXCLUDED.google_id,
         avatar_url = EXCLUDED.avatar_url,
-        role = CASE
-          WHEN users.role = 'admin' THEN 'admin'
-          WHEN EXCLUDED.role = 'admin' THEN 'admin'
-          ELSE users.role
-        END,
+        role = EXCLUDED.role,
         settings = CASE
           WHEN users.settings IS NOT NULL AND users.settings != '{}'::jsonb THEN users.settings
           WHEN EXCLUDED.settings IS NOT NULL AND EXCLUDED.settings != '{}'::jsonb THEN EXCLUDED.settings
@@ -166,10 +174,7 @@ router.post('/dev-login', async (req, res) => {
     VALUES ($1, $2, $3, $4)
     ON CONFLICT (email) DO UPDATE SET
       name = COALESCE(EXCLUDED.name, users.name),
-      role = CASE
-        WHEN EXCLUDED.role = 'admin' THEN 'admin'
-        ELSE users.role
-      END,
+      role = EXCLUDED.role,
       settings = CASE
         WHEN users.settings IS NOT NULL AND users.settings != '{}'::jsonb THEN users.settings
         WHEN EXCLUDED.settings IS NOT NULL AND EXCLUDED.settings != '{}'::jsonb THEN EXCLUDED.settings
@@ -213,10 +218,16 @@ router.post('/admin-login', async (req, res) => {
     const envAdminUsers = getAdminUsersFromEnv();
     const expectedPassword = envAdminUsers[normalizedEmail];
 
-    const isMatch = (typeof expectedPassword === 'string' && expectedPassword.startsWith('$2'))
-      ? await bcrypt.compare(password, expectedPassword)
-      : expectedPassword === password;
-    if (!expectedPassword || !isMatch) {
+    if (!expectedPassword || typeof expectedPassword !== 'string' || !expectedPassword.startsWith('$2')) {
+      console.warn(`Admin password for ${normalizedEmail} must be a bcrypt hash.`);
+      return res.status(401).json({
+        error: 'Invalid credentials',
+        message: 'Invalid email or password for admin portal.',
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, expectedPassword);
+    if (!isMatch) {
       return res.status(401).json({
         error: 'Invalid credentials',
         message: 'Invalid email or password for admin portal.',

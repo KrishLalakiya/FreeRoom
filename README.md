@@ -1,107 +1,172 @@
 # FreeRoom
 
-FreeRoom shows students which classrooms in their college building are empty right now, which are free later today or tomorrow, and for how long. It also shows each student's own class timetable with the free rooms during their gaps.
+FreeRoom shows which classrooms in a college building are free right now, how long they stay free, which rooms open tomorrow, and which rooms a student can use between classes.
 
-## Problem Statement
+- **Live app:** https://freeroom-nine.vercel.app
+- **Demo video:** https://youtu.be/dG45sPS2R54
 
-Students waste time walking between classrooms to find an empty room to study or hold a group discussion. The library has limited seats, and the timetable for each batch and group is kept in a spreadsheet that students cannot easily check. There is no single place to see which rooms are free, when they become busy again, and which rooms are free during a student's own gap between classes.
+## Problem
 
-## Target Users
+Students walk between classrooms looking for an empty room to study or meet a group. Timetables are kept in spreadsheets that students cannot easily check, so nobody can see which rooms are free, when they become busy, or which rooms are free during their own gap.
 
-- **Students** of one college building (pilot: Batch 2028 Term 9 and Batch 2029 Term 5, with Batch 2030 to follow). They want to find a free room quickly, between classes or for a specific time later.
-- **Admins** (college staff) who keep the timetable up to date. They import the weekly timetable, cancel single classes, add one-off events and enter exam closures.
+FreeRoom turns the weekly timetable into a live availability view. Students can browse without signing in.
 
-## Solution
+## Features
 
-FreeRoom turns the weekly timetable spreadsheet into a live availability view. The timetable is imported once per term, and closures and one-off events are entered by admins. The app then works out, for every room and every moment in building hours, whether the room is busy or free, and for how long. Students see this on three pages, without signing in.
+### Students (no sign-in needed)
 
-## Key Features
+- **Free now:** rooms free at this moment, with the time each one stays free. Filter by minimum free time.
+- **Find a room:** choose a date, a time window and a floor. Open a room to see its full day, with each booked slot and the free gaps.
+- **My group:** choose a batch, group and day to see that group's classes. Each gap shows the room that covers the whole gap. If no single room does, the app shows a chain of rooms or the longest free stretches.
+- **Next day:** while classes are still running, the card shows today's remaining rooms. After the last class, it shows "All classes are over for today" and then tomorrow's rooms with their first class.
+- **Batch and group memory:** the batch and group are asked for on the first visit and remembered on that device.
+- **Optional Google sign-in:** signed-in students keep their batch, group and settings across devices.
+- **Themes:** light and dark modes.
 
-**Students (no sign-in needed to browse)**
+### Admins (two configured accounts only)
 
-- **Free now:** all rooms that are free at this moment, with the time each one stays free. Filter by the minimum free time (any, 30 minutes, 1 hour, 2 hours).
-- **Find a room:** pick a date (defaults to the next day), a time window and a floor to see free rooms. Open any room to see its full day: the batch, group, subject and teacher in each booked slot, and the free gaps.
-- **My group:** pick a day and see your batch and group's classes, with the free rooms available during each gap. Your batch and group are asked for on your first visit and remembered on that device.
-- **Next day timetable:** the rooms that open in the morning and what is booked in them.
-- **Sign in with Google (optional):** signed-in students keep their batch, group and favourite rooms across devices.
+- Import a weekly timetable from an `.xlsx` file, with validation and room-name matching. Only valid rows can be imported.
+- Create, edit and delete academic terms.
+- Cancel a single class on a given date.
+- Add one-off events, with clash detection.
+- Add holidays, breaks, and exam or room closures for a room, a floor or the whole building.
+- View the action log of every admin change.
 
-**Admins (sign-in and admin role required)**
+## How availability works
 
-- Import a weekly timetable from an `.xlsx` export, with validation and room name matching.
-- Schedule one-off events (seminars, exams, club meetings) with clash detection.
-- Cancel a single class on a given date to free its room.
-- Add holidays and breaks, and exam or room closures for a room, a floor or the whole building.
-- View the action log of every change an admin has made.
+For each room and moment, the availability engine:
+
+1. Finds the term that covers the date.
+2. Collects the room's busy blocks for that weekday from the timetable.
+3. Applies cancellations, closures and one-off events, which override the timetable. Holidays and breaks are no-class days, so the timetable is skipped on those days.
+4. Subtracts the busy blocks from building hours (06:00 to 22:00, Asia/Kolkata) to get the free gaps.
+
+Room 2B is split into 2B1 and 2B2. Room 2B counts as free only when both halves are free.
+
+Results are cached for 60 seconds and cleared on every schedule change.
+
+## Tech stack
+
+- **Frontend:** React 19, Vite 8
+- **Backend:** Node.js (ES modules), Express 4, express-rate-limit, multer, cors
+- **Database:** PostgreSQL, accessed with `pg`
+- **Authentication:** Google sign-in with `google-auth-library`, session tokens with `jsonwebtoken`, admin passwords with `bcryptjs`
+- **Timetable import:** `xlsx` (SheetJS)
+- **Testing:** Vitest
+- **Hosting:** Vercel (frontend), Render (API), Supabase (PostgreSQL)
+
+## Project structure
+
+```text
+client/          React app (pages, components, theme CSS)
+server/
+  src/
+    config/      database connection, migrations, seed data
+    middleware/  authentication and admin checks
+    routes/      auth, rooms, reports, admin
+    services/    availability engine, gap planner, timetable import, cache
+    utils/       campus time-zone helpers
+  scripts/       next-term upload command
+  tests/         unit tests
+docs/            operations runbook for uploading a new term
+```
+
+## Getting started
+
+### Prerequisites
+
+- Node.js 18 or later
+- PostgreSQL 14 or later
+
+### Run locally
+
+```bash
+# 1. Install dependencies
+cd server && npm install
+cd ../client && npm install
+
+# 2. Configure the server
+cp server/.env.example server/.env
+# Edit server/.env (see Environment variables below)
+
+# 3. Create the tables and load the building and terms
+cd server
+npm run migrate
+npm run seed
+
+# 4. Start the API and the web app (two terminals)
+cd server && npm run dev        # API on http://localhost:5000
+cd client && npm run dev        # web app on http://localhost:5173
+```
+
+### Run tests
+
+```bash
+cd server && npm test
+```
+
+### Build the web app
+
+```bash
+cd client && npm run build
+```
+
+## Environment variables
+
+Keep real values out of Git. Put them in `server/.env` locally and in the hosting provider's settings in production. The full list is in `server/.env.example`.
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection string |
+| `JWT_SECRET` | Signs session tokens. Required in production |
+| `JWT_EXPIRES_IN` | Token lifetime (15 days) |
+| `GOOGLE_CLIENT_ID` | Google sign-in client ID |
+| `ADMIN_EMAILS` | The two admin email addresses |
+| `ADMIN_USERS` | Admin email and bcrypt password hash pairs, if password sign-in is used |
+| `CLIENT_URL` | The web app's URL, allowed by CORS |
+| `CAMPUS_TIMEZONE` | Time zone for all displayed times (`Asia/Kolkata`) |
+| `BUFFER_MINUTES` | Minutes kept free around each class (default 0) |
+| `NODE_ENV` | `development` locally, `production` when deployed |
+
+## Timetable and terms
+
+Each batch's timetable is one `.xlsx` file for one term.
+
+1. Create the term (batch, semester, term number, start and end dates) in the admin dashboard.
+2. Upload the spreadsheet for that term. Fix any reported rows, then import.
+3. Add closures and holidays for the term's exam weeks and breaks.
+
+The full procedure, including the command-line upload, is in `docs/OPERATIONS_NEXT_TERM.md`.
 
 ## Deployment
 
-- **Live app:** [https://freeroom-nine.vercel.app/](https://freeroom-nine.vercel.app/)
-- **Demo video:** [https://youtu.be/dG45sPS2R54 ](https://youtu.be/dG45sPS2R54)
-- **Hosting:** 
-  - **Client (Frontend):** Vercel
-  - **Server (Backend API):** Render Web Service
-  - **Database:** Supabase
+- **Web app:** Vercel. Set the API address in the frontend environment.
+- **API:** Render web service, in the same region as the database. Set `NODE_ENV=production`, `JWT_SECRET`, `CLIENT_URL` and the other variables above.
+- **Database:** Supabase PostgreSQL, in the same region as the API.
 
-## Tech Stack
+Check `GET /api/health` after deploying. It should return `"status":"ok"` and `"env":"production"`.
 
-- **Frontend:** React 19 (`^19.3.1`) built with Vite 8 (`^8.3.4`), React Router v7 (`^7.18.4`), Axios (`^1.20.0`), React Hot Toast (`^2.6.1`), and React Icons (`^5.7.0`)
-- **Backend:** Node.js (v18+) with Express (`^4.21.0`), ES Modules, CORS (`^2.8.5`), and Express Rate Limit (`^7.4.1`)
-- **Database:** PostgreSQL (v14+) accessed via `pg` (`node-postgres ^8.13.0`) with connection pooling and relational migrations
-- **Authentication:** Google OAuth 2.0 via `@react-oauth/google` and `google-auth-library` (`^9.14.1`), JSON Web Tokens (`jsonwebtoken ^9.0.2`), and environment-backed credentials authentication for administrators
-- **Timetable import:** SheetJS (`xlsx ^0.18.5`) for Excel spreadsheet parsing, with `multer` (`^1.4.5-lts.1`) for multipart file uploads
-- **Styling:** Vanilla CSS with custom design tokens supporting three theme modes (Light, Dark, and Darker)
+## Security
 
-## Architecture
-
-```text
-Browser (React)
-   │  HTTPS, JSON
-   ▼
-Express API
-   ├── Auth: Google sign-in, JWT, admin role check on every admin route
-   ├── Timetable import: .xlsx → validate → batch, term, group, subject, room entries
-   ├── Availability engine
-   └── Admin actions: closures, cancellations, one-off events, action log
-   │
-   ▼
-PostgreSQL
-   batch · term · group · subject · instructor · timetable entry · room · closure · no-class day · admin action
-```
-
-**Availability engine.** For a given room and moment, the engine:
-
-1. Finds the term that covers the date.
-2. Collects the room's busy blocks from the timetable for that weekday.
-3. Adds closure blocks (exams, maintenance) and one-off events, which override the timetable.
-4. Subtracts the busy blocks from building hours (6:00 am to 10:00 pm) to get free gaps, and reports each room as free or busy with the time it stays that way.
-
-**Rooms.** Ground floor: C. First floor: 1A, 1B. Second floor: 2A, 2C, and 2B, which can be split into 2B1 and 2B2 (100 seats each). 2B is free only when both halves are free.
-
-**Errors handled.** Invalid timetable rows are reported at import, and the admin can import only valid rows. Failed network requests show a retry message. Admin routes return 403 for non-admin accounts. A corrupt or missing saved batch and group makes the batch picker appear before the schedule loads.
-
-## Originality and Credits
-
-- **React 19 & Vite 8:** For component-driven architecture, fast Hot Module Replacement (HMR), and optimized bundle compilation.
-- **SheetJS (`xlsx`):** For client-side and server-side parsing of raw Excel timetable workbooks into relational data structures.
-- **PostgreSQL & `pg`:** High-performance relational storage for complex term schedules, partition hierarchies, and ACID-compliant transactional updates.
-- **Google Identity Services & `@react-oauth/google`:** Secure, modern OAuth 2.0 sign-in without requiring third-party redirect popups.
-- **Heroicons / React Icons:** Clean, accessible SVG iconography tailored for schedule navigation.
-- **React Hot Toast:** Accessible micro-notifications for feedback on schedule operations, admin actions, and authentication.
-- **Availability Interval Algorithm:** Developed specifically for FreeRoom to perform dynamic interval subtraction against building operating hours, factoring in partition overlaps, exam closures, and one-off events.
+- Admin access is limited to the two accounts in `ADMIN_EMAILS`. Any other sign-in, including one whose address contains "admin", is a student.
+- CORS allows only the configured web app URL and this project's preview URLs.
+- Mock time, used for testing, is honoured only for the two admin accounts.
+- Secrets are read from environment variables. Do not commit `.env` files.
 
 ## Status
 
-- **Working:**
-  - Live "Free now" room occupancy status with interval countdowns and duration filters.
-  - "Find a room" future time-window query with floor filters and full-day room timeline breakdowns.
-  - "My group" personalised schedule with automatic gap detection and vacant room recommendations.
-  - Room 2B partition hierarchy: smart synchronization between parent room 2B (200 seats) and sub-rooms 2B1/2B2 (100 seats each).
-  - Guest browsing: students browse all screens without requiring an account.
-  - Google OAuth sign-in and cross-device sync for saved batch, group, and settings.
-  - Admin login with Google OAuth and environment-configured credentials (`ADMIN_USERS`).
-  - Admin dashboard: timetable master view, Excel spreadsheet importer with alias normalization, single-class cancellations, one-off events with conflict detection, exam/emergency closures, and administrative action logs.
-  - Theme switching across Light, Dark, and Darker themes with responsive mobile sheet support.
-- **Planned:**
-  - Push and calendar notifications for last-minute class cancellations or room reassignments.
-  - Multi-building support across campus expansion sites.
-  - Batch 2030 automated timetable ingestion upon academic term release.
+**Working**
+
+- Free now, Find a room, My group and Next day views
+- Gap planner with single-room and chained recommendations
+- Room 2B split into 2B1 and 2B2
+- Google sign-in and cross-device settings
+- Admin dashboard: timetable import, cancellations, events, closures, no-class days and the action log
+- Multi-building support (the building ID is no longer hard-coded)
+- Automatic ingestion of the Batch 2030 timetable
+- Availability queries respond in about 2 seconds at most (PRD v8 and v9)
+
+**Planned**
+
+- Notifications for last-minute cancellations and room changes
+

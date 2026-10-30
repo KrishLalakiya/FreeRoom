@@ -6,6 +6,7 @@ import {
   addDaysToDateStr,
   isValidDateStr,
   getOffsetMinutes,
+  parseMockOrNow,
 } from '../../src/utils/timezone.js';
 
 describe('campus timezone helpers', () => {
@@ -45,5 +46,9 @@ describe('campus timezone helpers', () => {
     expect(isValidDateStr('2026-02-30')).toBe(false);
     expect(isValidDateStr('2026-13-01')).toBe(false);
     expect(isValidDateStr('21-10-2026')).toBe(false);
+  });
+  it('parses offsetless ISO strings using campus timezone', () => {
+    const parsed = parseMockOrNow('2026-10-30T14:40:00');
+    expect(parsed.toISOString()).toBe('2026-10-30T09:10:00.000Z');
   });
 });

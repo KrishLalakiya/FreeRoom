@@ -1,5 +1,7 @@
 import axios from 'axios';
 
+export const DEFAULT_BUILDING_ID = 1;
+
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
 const api = axios.create({
@@ -28,11 +30,14 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
+      const hadToken = !!localStorage.getItem('freeroom_token');
       localStorage.removeItem('freeroom_token');
       localStorage.removeItem('freeroom_user');
       // Only redirect if attempting to access protected admin page
       if (window.location.pathname.startsWith('/admin') && window.location.pathname !== '/admin/login') {
         window.location.href = '/admin/login';
+      } else if (hadToken && typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('freeroom_auth_expired'));
       }
     }
     return Promise.reject(error);

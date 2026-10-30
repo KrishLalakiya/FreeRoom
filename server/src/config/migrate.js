@@ -1,4 +1,4 @@
-import { query, getClient } from './db.js';
+import { getClient } from './db.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -70,9 +70,21 @@ async function migrate() {
         floor           VARCHAR(50),
         capacity        INTEGER,
         parent_room_id  INTEGER REFERENCES rooms(id) ON DELETE SET NULL,
+        is_study_allowed BOOLEAN NOT NULL DEFAULT TRUE,
         created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(building_id, name)
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE rooms
+      ADD COLUMN IF NOT EXISTS is_study_allowed BOOLEAN NOT NULL DEFAULT TRUE;
+    `);
+
+    await client.query(`
+      UPDATE rooms
+      SET is_study_allowed = FALSE
+      WHERE UPPER(name) = 'SSB';
     `);
 
     // ── Room aliases (for inconsistent timetable names) ────

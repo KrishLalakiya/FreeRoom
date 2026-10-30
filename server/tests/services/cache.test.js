@@ -82,20 +82,24 @@ describe('AvailabilityCache (C10, PRD Section 6)', () => {
     expect(cache.get('free_window:1:2026-10-26:09:00:10:00:all:any')).toBeNull();
   });
 
-  it('clearAvailabilityCache helper functions as intended', () => {
+  it('clearAvailabilityCache clears all cached keys on any schedule change (PRD v9)', () => {
     availabilityCache.set('timeline:5:2026-10-26', { id: 5 });
     availabilityCache.set('timeline:6:2026-10-26', { id: 6 });
     availabilityCache.set('free_now:1:all:60', { rooms: [] });
+    availabilityCache.set('next_day_tt:1:2026-10-27:all', { classes: [] });
+    availabilityCache.set('all_rooms_avail:1:2026-10-26', { rooms: [] });
+    availabilityCache.set('my_group:1:2028:Group A:2026-10-26', { classes: [] });
+    availabilityCache.set('batches_and_groups:2026-10-26', { batches: [] });
 
-    // Invalidate room 5
+    // Any schedule change clears the entire cache
     clearAvailabilityCache({ roomId: 5 });
     expect(availabilityCache.get('timeline:5:2026-10-26')).toBeNull();
-    expect(availabilityCache.get('timeline:6:2026-10-26')).toBeTruthy();
-    expect(availabilityCache.get('free_now:1:all:60')).toBeNull();
-
-    // Global clear
-    clearAvailabilityCache();
     expect(availabilityCache.get('timeline:6:2026-10-26')).toBeNull();
+    expect(availabilityCache.get('free_now:1:all:60')).toBeNull();
+    expect(availabilityCache.get('next_day_tt:1:2026-10-27:all')).toBeNull();
+    expect(availabilityCache.get('all_rooms_avail:1:2026-10-26')).toBeNull();
+    expect(availabilityCache.get('my_group:1:2028:Group A:2026-10-26')).toBeNull();
+    expect(availabilityCache.get('batches_and_groups:2026-10-26')).toBeNull();
     expect(availabilityCache.size()).toBe(0);
   });
 });
