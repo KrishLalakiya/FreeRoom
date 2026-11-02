@@ -24,6 +24,36 @@ export function getTomorrowStr() {
   return formatLocalDateStr(d);
 }
 
+export function getNextTimetableDayStr(baseDate = null) {
+  const mockStr = typeof window !== 'undefined' && (window.__MOCK_TIME__ || localStorage.getItem('freeroom_mock_time'));
+  const base = baseDate ? new Date(baseDate) : (mockStr ? new Date(mockStr) : new Date());
+  const next = new Date(base);
+  next.setDate(next.getDate() + 1);
+  if (next.getDay() === 0) {
+    next.setDate(next.getDate() + 1);
+  }
+  return formatLocalDateStr(next);
+}
+
+export function getDefaultTimetableDate() {
+  const mockStr = typeof window !== 'undefined' && (window.__MOCK_TIME__ || localStorage.getItem('freeroom_mock_time'));
+  const d = mockStr ? new Date(mockStr) : new Date();
+
+  // If today is Sunday, no classes; advance to Monday
+  if (d.getDay() === 0) {
+    return getNextTimetableDayStr(d);
+  }
+
+  // If after evening classes (e.g. 7:45 PM / 19:45), default to tomorrow / next campus day
+  const currentMinutes = d.getHours() * 60 + d.getMinutes();
+  if (currentMinutes >= 1185) {
+    return getNextTimetableDayStr(d);
+  }
+
+  // Otherwise during the day until the last class, default is TODAY
+  return formatLocalDateStr(d);
+}
+
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'
@@ -306,7 +336,7 @@ export default function DatePicker({
               </label>
               {!hideDefaultLabel && (
                 <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                  {value === tomorrowStr ? 'Next Day (Default)' : value === todayStr ? 'Today' : ''}
+                  {value === todayStr ? 'Today' : value === tomorrowStr ? 'Tomorrow' : ''}
                 </span>
               )}
             </div>
@@ -378,7 +408,7 @@ export default function DatePicker({
                 style={{ padding: '4px 10px', fontSize: '12px' }}
                 onClick={() => onChange(tomorrowStr)}
               >
-                Tomorrow (Default)
+                Tomorrow
               </button>
             </div>
           )}

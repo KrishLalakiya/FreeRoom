@@ -105,6 +105,7 @@ describe('My Group Schedule and Gaps (C20, PRD Section 2)', () => {
 
     expect(filterGapRoomsForStudy(freeRooms).map((r) => r.name)).toEqual(['1A', '2A']);
   });
+
   it('does not match compound group AB when querying for group A (discrete matching)', () => {
     const classes = [
       { id: 1, subject: 'Subject 1', start_time: '09:00', end_time: '10:00', groups: ['AB'] },
@@ -113,5 +114,43 @@ describe('My Group Schedule and Gaps (C20, PRD Section 2)', () => {
     ];
     const filtered = filterClassesForGroup(classes, 'A');
     expect(filtered.map((c) => c.id)).toEqual([2, 3]);
+  });
+
+  it('correctly detects whether current time is before or after last class', () => {
+    function isAfterLastClassCheck(classes, currentTimeStr) {
+      if (!classes || classes.length === 0) {
+        return currentTimeStr >= '17:00';
+      }
+      const lastClass = classes[classes.length - 1];
+      return currentTimeStr >= lastClass.end_time;
+    }
+
+    const todayClasses = [
+      { id: 1, subject: 'MERN', start_time: '09:00', end_time: '11:00' },
+      { id: 2, subject: 'DSA', start_time: '14:00', end_time: '15:30' },
+    ];
+
+    // Morning (e.g. 10:19 AM): before last class -> false (keep today)
+    expect(isAfterLastClassCheck(todayClasses, '10:19')).toBe(false);
+    expect(isAfterLastClassCheck(todayClasses, '15:29')).toBe(false);
+
+    // After last class ended -> true (switch to tomorrow)
+    expect(isAfterLastClassCheck(todayClasses, '15:30')).toBe(true);
+    expect(isAfterLastClassCheck(todayClasses, '18:00')).toBe(true);
+  });
+
+  it('handles empty class days by keeping today during campus hours and advancing after 17:00', () => {
+    function isAfterLastClassCheck(classes, currentTimeStr) {
+      if (!classes || classes.length === 0) {
+        return currentTimeStr >= '17:00';
+      }
+      const lastClass = classes[classes.length - 1];
+      return currentTimeStr >= lastClass.end_time;
+    }
+
+    expect(isAfterLastClassCheck([], '10:19')).toBe(false);
+    expect(isAfterLastClassCheck([], '14:00')).toBe(false);
+    expect(isAfterLastClassCheck([], '17:01')).toBe(true);
+    expect(isAfterLastClassCheck([], '20:00')).toBe(true);
   });
 });

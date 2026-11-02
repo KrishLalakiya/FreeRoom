@@ -12,7 +12,7 @@ import {
 import { calculateGapPlan } from '../services/roomChainingEngine.js';
 import { getSystemSettings } from '../services/systemSettings.js';
 import { optionalAuthenticate } from '../middleware/auth.js';
-import { toDateStr, isValidDateStr, dayOfWeekForDateStr, parseMockOrNow } from '../utils/timezone.js';
+import { toDateStr, isValidDateStr, dayOfWeekForDateStr, parseMockOrNow, zonedTimeToUtc } from '../utils/timezone.js';
 
 const router = Router();
 
@@ -339,10 +339,17 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
       return res.status(400).json({ error: 'Invalid date format' });
     }
 
+    const isUserAdmin = req.user && req.user.role === 'admin';
+    const mockTime = isUserAdmin ? (req.query.now || req.headers['x-mock-time']) : null;
+    const now = parseMockOrNow(mockTime);
+    const bypassCache = !!mockTime;
+
     const cacheKey = `my_group:${buildingId}:${batchYear}:${groupName}:${date}`;
-    const cached = availabilityCache.get(cacheKey);
-    if (cached) {
-      return res.json(structuredClone(cached));
+    if (!bypassCache) {
+      const cached = availabilityCache.get(cacheKey);
+      if (cached) {
+        return res.json(structuredClone(cached));
+      }
     }
 
     // 1. Find term covering this date for the given batch
@@ -474,8 +481,15 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
       }
     }
 
+    let isAfterLastClass = false;
+    let lastClassEndTime = null;
     if (activeClasses.length > 0) {
       const lastClass = activeClasses[activeClasses.length - 1];
+      lastClassEndTime = lastClass.end_time;
+      const lastClassUtc = zonedTimeToUtc(date, lastClass.end_time);
+      if (now >= lastClassUtc) {
+        isAfterLastClass = true;
+      }
       const closingTime = '22:00';
       if (lastClass.end_time < closingTime) {
         gapWindows.push({
@@ -485,6 +499,11 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
           nextClassRoom: null,
           isAfterLastClass: true,
         });
+      }
+    } else {
+      const eveningCutoff = zonedTimeToUtc(date, '17:00');
+      if (now >= eveningCutoff) {
+        isAfterLastClass = true;
       }
     }
 
@@ -562,12 +581,16 @@ router.get('/my-group', optionalAuthenticate, async (req, res) => {
         start_date: term.start_date,
         end_date: term.end_date,
       },
+      is_after_last_class: isAfterLastClass,
+      last_class_time: lastClassEndTime,
       classes_count: activeClasses.length,
       classes: activeClasses,
       gaps_count: gaps.length,
       gaps,
     };
-    availabilityCache.set(cacheKey, responsePayload);
+    if (!bypassCache) {
+      availabilityCache.set(cacheKey, responsePayload);
+    }
     res.json(responsePayload);
   } catch (err) {
     console.error('My group error:', err);

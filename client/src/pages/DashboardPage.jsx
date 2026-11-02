@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { roomsAPI, DEFAULT_BUILDING_ID } from '../services/api';
 import Navbar from '../components/Navbar';
 import RoomCard from '../components/RoomCard';
-import DatePicker, { getTodayStr, getTomorrowStr } from '../components/DatePicker';
+import DatePicker, { getTodayStr, getTomorrowStr, getNextTimetableDayStr, getDefaultTimetableDate } from '../components/DatePicker';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 
@@ -64,6 +64,35 @@ function formatLocalDateStr(d) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+export function checkIsAfterLastClass(classes, dateStr) {
+  const mockStr = typeof window !== 'undefined' && (window.__MOCK_TIME__ || localStorage.getItem('freeroom_mock_time'));
+  const now = mockStr ? new Date(mockStr) : new Date();
+  const todayStr = formatLocalDateStr(now);
+
+  if (dateStr < todayStr) return true;
+  if (dateStr > todayStr) return false;
+
+  if (!classes || classes.length === 0) {
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    return currentMinutes >= 17 * 60;
+  }
+
+  let latestEnd = '00:00';
+  for (const c of classes) {
+    const end = String(c.end_time || '').slice(0, 5);
+    if (end > latestEnd) {
+      latestEnd = end;
+    }
+  }
+  if (!latestEnd || latestEnd === '00:00') return true;
+
+  const [endH, endM] = latestEnd.split(':').map(Number);
+  const lastClassDate = new Date(now);
+  lastClassDate.setHours(endH, endM, 0, 0);
+
+  return now >= lastClassDate;
 }
 
 function getMondayOf(date) {
@@ -1309,12 +1338,14 @@ function MyGroupScreen() {
   const navigate = useNavigate();
   const todayStr = getTodayStr();
   const tomorrowStr = getTomorrowStr();
+  const defaultTimetableDay = getDefaultTimetableDate();
   const scheduleRef = useRef(null);
+  const userManuallySelectedDateRef = useRef(false);
 
   // Dynamic Week Monday state initialized to Monday of the initial day
   const [weekMonday, setWeekMonday] = useState(() => {
-    const initDate = tomorrowStr
-      ? new Date(Number(tomorrowStr.split('-')[0]), Number(tomorrowStr.split('-')[1]) - 1, Number(tomorrowStr.split('-')[2]))
+    const initDate = defaultTimetableDay
+      ? new Date(Number(defaultTimetableDay.split('-')[0]), Number(defaultTimetableDay.split('-')[1]) - 1, Number(defaultTimetableDay.split('-')[2]))
       : new Date();
     return getMondayOf(initDate);
   });
@@ -1362,13 +1393,20 @@ function MyGroupScreen() {
   const goToPrevWeek = () => changeWeekBy(-7);
   const goToNextWeek = () => changeWeekBy(7);
 
+  const handleSelectDay = (dayStr) => {
+    userManuallySelectedDateRef.current = true;
+    setSelectedDay(dayStr);
+  };
+
   const goToCurrentWeek = () => {
+    userManuallySelectedDateRef.current = true;
     const today = new Date();
     setWeekMonday(getMondayOf(today));
     setSelectedDay(formatLocalDateStr(today));
   };
 
   const handleSelectCustomDate = (dateStr) => {
+    userManuallySelectedDateRef.current = true;
     setSelectedDay(dateStr);
     if (dateStr) {
       const [y, m, d] = dateStr.split('-').map(Number);
@@ -1446,8 +1484,8 @@ function MyGroupScreen() {
   const [group, setGroup] = useState(() => savedGroupRaw || 'Group A');
   const [hasPicked, setHasPicked] = useState(hasValidSavedChoice);
   const [showPicker, setShowPicker] = useState(!hasValidSavedChoice);
-  // Default to next day as requested
-  const [selectedDay, setSelectedDay] = useState(tomorrowStr);
+  // Default to today until last class, then next campus day
+  const [selectedDay, setSelectedDay] = useState(defaultTimetableDay);
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -1552,6 +1590,17 @@ function MyGroupScreen() {
       if (reqId !== scheduleReqIdRef.current) return;
       scheduleCacheRef.current[cacheKey] = { data: res.data, timestamp: Date.now() };
       setSchedule(res.data);
+
+      // Default to today until last class, then advance to tomorrow / next campus day
+      if (d === todayStr && !userManuallySelectedDateRef.current) {
+        const isAfter = checkIsAfterLastClass(res.data.classes, d);
+        if (isAfter) {
+          const nextDay = getNextTimetableDayStr();
+          setSelectedDay(nextDay);
+          const [ny, nm, nd] = nextDay.split('-').map(Number);
+          setWeekMonday(getMondayOf(new Date(ny, nm - 1, nd)));
+        }
+      }
     } catch {
       if (reqId === scheduleReqIdRef.current) {
         toast.error('Failed to load group schedule');
@@ -1653,7 +1702,7 @@ function MyGroupScreen() {
               <button
                 key={d.dateStr}
                 className={`day-btn${selectedDay === d.dateStr ? ' active' : ''}`}
-                onClick={() => setSelectedDay(d.dateStr)}
+                onClick={() => handleSelectDay(d.dateStr)}
               >
                 <span className="day-name">{d.dayName}</span>
                 <span className="day-num">{d.dayNum}</span>
