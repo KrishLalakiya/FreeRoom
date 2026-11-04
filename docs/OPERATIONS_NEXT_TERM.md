@@ -20,25 +20,25 @@ Before uploading a new term's spreadsheet:
 
 1. **Verify Sheet Format:** Ensure the file is an `.xlsx` workbook.
 2. **Confirm Column Headers:** The sheet should contain day-of-week sections (Monday through Friday/Saturday) and room column headers (e.g., `Classroom A (1st floor)`, `Classroom B (1st floor)`, `Classroom C (Ground floor)`, etc.).
-3. **Check Room Aliases:** If the faculty or scheduling coordinator used new room naming conventions, verify or add aliases in Admin UI (`/admin/timetable`) under "Room Aliases".
+3. **Check Room Aliases:** If the faculty or scheduling coordinator used new room naming conventions, verify or add aliases in the admin dashboard (`/admin`), on the **Import timetable** tab under "Room name matching".
 4. **Determine Term Dates:** Obtain the official term start date and end date from the academic calendar (e.g., `2026-10-29` to `2027-01-31`).
 
 ---
 
 ## 3. Upload Method A: Admin Web UI (Recommended)
 
-1. Navigate to `http://<host>:5173/admin/timetable` and log in with an administrator account.
-2. Under **"Academic Terms"**, click **"Create Term"**:
+1. Navigate to `http://<host>:5173/admin`, log in with an administrator account, and open the **Import timetable** tab.
+2. Next to **"Batch & Term"**, click **"+ Add New Term"**:
    - **Batch Year:** e.g., `2029` (or `2030` for incoming cohorts)
    - **Semester:** e.g., `3`
    - **Term Number:** e.g., `6`
    - **Start Date:** `2026-10-29`
    - **End Date:** `2027-01-31`
-   - Click **Save Term**.
-3. Under **"Upload Timetable"**:
-   - Select the newly created term from the **Term** dropdown: `Batch 2029 (Term 6)`.
+   - Click **Save term**.
+3. Under **"Upload Weekly Timetable"**:
    - Choose the exported `.xlsx` file.
-   - Click **Upload & Validate**.
+   - Check that the new term is selected in the **Batch & Term** dropdown.
+   - Click **Validate and import**.
 4. **Review Upload Report:**
    - **Saved Rows:** Confirms valid timetable entries stored.
    - **Duplicates:** Rows already present are automatically skipped.
@@ -118,5 +118,5 @@ After uploading, run the following verification steps:
    - Any term creation or timetable import immediately flushes the in-memory availability cache (`C10`).
    - Querying `GET /api/rooms/free-now` will immediately compute fresh availability reflecting the new timetable.
 4. **Student App Spot-Check:**
-   - Search for free rooms on the first day of the new term (`http://<host>:5173/plan`).
+   - Search for free rooms on the first day of the new term (`http://<host>:5173/find`).
    - Verify that classroom timelines reflect the new subjects, instructors, and group badges.

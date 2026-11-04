@@ -29,7 +29,16 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    // The token is valid but this account no longer has admin rights (role revoked, or the
+    // database was reset). Every admin call would fail, so send them back to sign in.
+    const adminAccessLost = error.response?.status === 403
+      && error.response.data?.error === 'Forbidden'
+      && window.location.pathname === '/admin';
+    if (adminAccessLost) {
+      localStorage.removeItem('freeroom_token');
+      localStorage.removeItem('freeroom_user');
+      window.location.href = '/admin/login';
+    } else if (error.response?.status === 401) {
       const hadToken = !!localStorage.getItem('freeroom_token');
       localStorage.removeItem('freeroom_token');
       localStorage.removeItem('freeroom_user');
@@ -117,8 +126,22 @@ export const adminAPI = {
   cancelClass: (data) =>
     api.post('/admin/cancel-class', data),
 
-  getTimetable: (roomId, termId) =>
-    api.get('/admin/timetable', { params: { roomId, termId } }),
+  getCancellations: () =>
+    api.get('/admin/cancellations'),
+
+  restoreCancellation: (cancellationId) =>
+    api.delete(`/admin/cancellations/${cancellationId}`),
+
+  // The endpoint is paged, so walk every page rather than silently showing a partial timetable.
+  getAllTimetable: async () => {
+    const pageSize = 1000;
+    const entries = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const res = await api.get('/admin/timetable', { params: { limit: pageSize, offset } });
+      entries.push(...res.data.entries);
+      if (res.data.entries.length < pageSize) return entries;
+    }
+  },
 
   getEvents: () =>
     api.get('/admin/events'),
@@ -128,6 +151,9 @@ export const adminAPI = {
 
   createTerm: (data) =>
     api.post('/admin/terms', data),
+
+  updateTerm: (termId, data) =>
+    api.put(`/admin/terms/${termId}`, data),
 
   deleteTerm: (termId) =>
     api.delete(`/admin/terms/${termId}`),

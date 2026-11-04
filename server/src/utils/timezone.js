@@ -46,6 +46,8 @@ function zonedParts(date, timeZone = campusTimeZone()) {
 }
 
 export function toDateStr(date = new Date(), timeZone = campusTimeZone()) {
+  // DATE columns already arrive as calendar-date strings (see config/db.js).
+  if (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
   const p = zonedParts(date, timeZone);
   return `${p.year}-${pad(p.month)}-${pad(p.day)}`;
 }

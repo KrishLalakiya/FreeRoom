@@ -20,6 +20,30 @@ import {
 import toast from 'react-hot-toast';
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const CAMPUS_TIME_ZONE = 'Asia/Kolkata';
+const CAMPUS_UTC_OFFSET = '+05:30';
+
+/** A datetime-local value means campus time, whatever time zone this browser is in. */
+function campusLocalToIso(value) {
+  return new Date(`${value}:00${CAMPUS_UTC_OFFSET}`).toISOString();
+}
+
+/** '09:15:00' to '09:15'. */
+function formatTime(time) {
+  return String(time).slice(0, 5);
+}
+
+function dayOfWeekForDate(dateStr) {
+  return new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+}
+
+/** Whether a recurring class runs on a date: right weekday, and inside its term. */
+function runsOnDate(entry, dateStr) {
+  if (entry.day_of_week !== dayOfWeekForDate(dateStr)) return false;
+  const from = entry.term_start || entry.valid_from;
+  const to = entry.term_end || entry.valid_to;
+  return (!from || from <= dateStr) && (!to || to >= dateStr);
+}
 
 function AdminNavbar() {
   const { user, logout } = useAuth();
@@ -155,6 +179,7 @@ function ActionLogCard({ logs }) {
             const timeStr = isNaN(dateObj.getTime())
               ? ''
               : dateObj.toLocaleDateString('en-GB', {
+                  timeZone: CAMPUS_TIME_ZONE,
                   day: 'numeric',
                   month: 'short',
                   hour: 'numeric',
@@ -219,7 +244,8 @@ export default function AdminPage() {
   const [rooms, setRooms] = useState([]);
   const [events, setEvents] = useState([]);
   const [timetable, setTimetable] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loadingData, setLoadingData] = useState(true);
+  const [failedSections, setFailedSections] = useState([]);
 
   // New Event Form State
   const [eventRoomId, setEventRoomId] = useState('');
@@ -233,6 +259,8 @@ export default function AdminPage() {
   const [cancelDate, setCancelDate] = useState(getCampusDateStr());
   const [cancelReason, setCancelReason] = useState('');
   const [cancellingClass, setCancellingClass] = useState(false);
+  const [cancellations, setCancellations] = useState([]);
+  const [restoringId, setRestoringId] = useState(null);
 
   // Timetable Filters
   const [timetableRoomFilter, setTimetableRoomFilter] = useState('');
@@ -242,15 +270,17 @@ export default function AdminPage() {
   const [terms, setTerms] = useState([]);
   const [selectedTermId, setSelectedTermId] = useState('');
   const [showCreateTerm, setShowCreateTerm] = useState(false);
-  const [newBatchYear, setNewBatchYear] = useState('2029');
-  const [newSemesterNumber, setNewSemesterNumber] = useState('3');
-  const [newTermNumber, setNewTermNumber] = useState('5');
-  const [newTermStartDate, setNewTermStartDate] = useState('2026-08-01');
-  const [newTermEndDate, setNewTermEndDate] = useState('2026-10-28');
+  const [editingTermId, setEditingTermId] = useState(null);
+  const [newBatchYear, setNewBatchYear] = useState('');
+  const [newSemesterNumber, setNewSemesterNumber] = useState('');
+  const [newTermNumber, setNewTermNumber] = useState('');
+  const [newTermStartDate, setNewTermStartDate] = useState('');
+  const [newTermEndDate, setNewTermEndDate] = useState('');
   const [creatingTerm, setCreatingTerm] = useState(false);
 
   // Timetable import
   const [importFile, setImportFile] = useState(null);
+  const [importFileInputKey, setImportFileInputKey] = useState(0);
   const [saveValidRowsOnly, setSaveValidRowsOnly] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importReport, setImportReport] = useState(null);
@@ -303,46 +333,62 @@ export default function AdminPage() {
     }
   };
 
-  const loadInitialData = async () => {
-    setLoading(true);
+  const refreshCancellations = async () => {
     try {
-      const [roomsRes, eventsRes, timetableRes, aliasesRes, termsRes, closuresRes, noClassRes, logsRes, settingsRes] = await Promise.all([
-        roomsAPI.list(1),
-        adminAPI.getEvents(),
-        adminAPI.getTimetable(),
-        adminAPI.getRoomAliases(),
-        adminAPI.getTerms(),
-        adminAPI.getClosures(),
-        adminAPI.getNoClassDays(),
-        adminAPI.getActionLogs(),
-        adminAPI.getSettings(),
-      ]);
-
-      const rList = roomsRes.data.rooms || [];
-      setRooms(rList);
-      if (rList.length > 0) {
-        setAliasRoomId((current) => current || rList[0].id);
-        setClosureRoomId((current) => current || rList[0].id.toString());
-        setClosureFloor((current) => current || rList[0].floor || 'Ground');
-      }
-      setEvents(eventsRes.data.events || []);
-      setTimetable(timetableRes.data.entries || []);
-      setAliases(aliasesRes.data.aliases || []);
-      setClosures(closuresRes.data.closures || []);
-      setNoClassDays(noClassRes.data.noClassDays || []);
-      setTerms(termsRes.data.terms || []);
-      setActionLogs(logsRes.data.actions || []);
-      if (settingsRes.data?.settings) {
-        setChainMinFree(settingsRes.data.settings.chain_min_free_minutes ?? 15);
-        setChainEnabled(settingsRes.data.settings.chain_enabled ?? true);
-        setBufferMins(settingsRes.data.settings.buffer_minutes ?? 0);
-      }
+      const res = await adminAPI.getCancellations();
+      setCancellations(res.data.cancellations || []);
     } catch (err) {
-      console.error('Failed to load admin data:', err);
-      toast.error('Failed to load admin data');
-    } finally {
-      setLoading(false);
+      console.error('Failed to refresh cancellations:', err);
+      toast.error('Could not refresh the list of cancelled classes');
     }
+  };
+
+  const loadInitialData = async () => {
+    setLoadingData(true);
+    // Each section loads on its own, so one failing endpoint cannot blank the whole panel.
+    const sections = [
+      ['rooms', () => roomsAPI.list(DEFAULT_BUILDING_ID), (res) => {
+        const rList = res.data.rooms || [];
+        setRooms(rList);
+        if (rList.length > 0) {
+          setAliasRoomId((current) => current || rList[0].id);
+          setClosureRoomId((current) => current || rList[0].id.toString());
+        }
+      }],
+      ['events', adminAPI.getEvents, (res) => setEvents(res.data.events || [])],
+      ['timetable', adminAPI.getAllTimetable, (entries) => setTimetable(entries)],
+      ['cancellations', adminAPI.getCancellations, (res) => setCancellations(res.data.cancellations || [])],
+      ['room aliases', adminAPI.getRoomAliases, (res) => setAliases(res.data.aliases || [])],
+      ['terms', adminAPI.getTerms, (res) => setTerms(res.data.terms || [])],
+      ['closures', adminAPI.getClosures, (res) => setClosures(res.data.closures || [])],
+      ['holidays', adminAPI.getNoClassDays, (res) => setNoClassDays(res.data.noClassDays || [])],
+      ['action log', adminAPI.getActionLogs, (res) => setActionLogs(res.data.actions || [])],
+      ['settings', adminAPI.getSettings, (res) => {
+        if (res.data?.settings) {
+          setChainMinFree(res.data.settings.chain_min_free_minutes ?? 15);
+          setChainEnabled(res.data.settings.chain_enabled ?? true);
+          setBufferMins(res.data.settings.buffer_minutes ?? 0);
+        }
+      }],
+    ];
+
+    const results = await Promise.allSettled(sections.map(([, load]) => load()));
+    const failed = [];
+    results.forEach((result, i) => {
+      const [name, , apply] = sections[i];
+      if (result.status === 'fulfilled') {
+        apply(result.value);
+      } else {
+        console.error(`Failed to load ${name}:`, result.reason);
+        failed.push(name);
+      }
+    });
+    setFailedSections(failed);
+    setLoadingData(false);
+  };
+
+  const refreshTimetable = async () => {
+    setTimetable(await adminAPI.getAllTimetable());
   };
 
   const handleCreateEvent = async (e) => {
@@ -362,8 +408,8 @@ export default function AdminPage() {
       await adminAPI.createEvent({
         roomId: parseInt(eventRoomId, 10),
         title: eventTitle.trim(),
-        startAt: new Date(eventStartAt).toISOString(),
-        endAt: new Date(eventEndAt).toISOString(),
+        startAt: campusLocalToIso(eventStartAt),
+        endAt: campusLocalToIso(eventEndAt),
       });
 
       toast.success('Event scheduled successfully!');
@@ -417,10 +463,12 @@ export default function AdminPage() {
 
       toast.success('Class occurrence cancelled successfully for selected date!');
       setCancelReason('');
-      await refreshActionLogs();
+      await Promise.all([refreshCancellations(), refreshActionLogs()]);
     } catch (err) {
       if (err.response?.status === 409) {
         toast.error(err.response.data.message || 'Already cancelled for this date');
+        // Someone else may have cancelled it, so show the row this admin was told exists.
+        await refreshCancellations();
       } else {
         toast.error(err.response?.data?.message || 'Failed to cancel class');
       }
@@ -429,13 +477,45 @@ export default function AdminPage() {
     }
   };
 
+  const handleRestoreClass = async (cancellation) => {
+    const label = `${cancellation.course_name || 'this class'} on ${cancellation.date}`;
+    if (!window.confirm(`Restore ${label}? Room ${cancellation.room_name} will show as busy again.`)) return;
+
+    setRestoringId(cancellation.id);
+    try {
+      await adminAPI.restoreCancellation(cancellation.id);
+      toast.success('Class restored');
+      await refreshActionLogs();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to restore class');
+    } finally {
+      // Refresh on failure too: a 404 means the row is stale and should disappear.
+      await refreshCancellations();
+      setRestoringId(null);
+    }
+  };
+
+  const classesOnCancelDate = cancelDate
+    ? timetable.filter((te) => runsOnDate(te, cancelDate))
+    : [];
+
   const filteredTimetable = timetable.filter((te) => {
     if (timetableRoomFilter && te.room_id.toString() !== timetableRoomFilter) return false;
     if (timetableTermFilter && te.term_id?.toString() !== timetableTermFilter) return false;
     return true;
   });
 
-  const handleCreateTerm = async (e) => {
+  const openTermForm = (term = null) => {
+    setEditingTermId(term ? term.id : null);
+    setNewBatchYear(term ? String(term.batch_year) : '');
+    setNewSemesterNumber(term ? String(term.semester_number) : '');
+    setNewTermNumber(term ? String(term.term_number) : '');
+    setNewTermStartDate(term ? String(term.start_date).slice(0, 10) : '');
+    setNewTermEndDate(term ? String(term.end_date).slice(0, 10) : '');
+    setShowCreateTerm(true);
+  };
+
+  const handleSaveTerm = async (e) => {
     e.preventDefault();
     if (!newBatchYear || !newSemesterNumber || !newTermNumber || !newTermStartDate || !newTermEndDate) {
       toast.error('Please fill in all term fields');
@@ -448,6 +528,22 @@ export default function AdminPage() {
 
     setCreatingTerm(true);
     try {
+      if (editingTermId) {
+        await adminAPI.updateTerm(editingTermId, {
+          semesterNumber: parseInt(newSemesterNumber, 10),
+          termNumber: parseInt(newTermNumber, 10),
+          startDate: newTermStartDate,
+          endDate: newTermEndDate,
+        });
+        toast.success(`Updated Term ${newTermNumber} for Batch ${newBatchYear}`);
+        const refreshed = await adminAPI.getTerms();
+        setTerms(refreshed.data.terms || []);
+        setShowCreateTerm(false);
+        await refreshTimetable();
+        await refreshActionLogs();
+        return;
+      }
+
       const res = await adminAPI.createTerm({
         batchYear: parseInt(newBatchYear, 10),
         semesterNumber: parseInt(newSemesterNumber, 10),
@@ -463,8 +559,8 @@ export default function AdminPage() {
       setShowCreateTerm(false);
       await refreshActionLogs();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to create term');
-      if (err.response?.status === 409 || (err.response?.data?.message && err.response.data.message.includes('already exists'))) {
+      toast.error(err.response?.data?.message || 'Failed to save term');
+      if (!editingTermId && (err.response?.status === 409 || (err.response?.data?.message && err.response.data.message.includes('already exists')))) {
         try {
           const refreshed = await adminAPI.getTerms();
           const list = refreshed.data.terms || [];
@@ -491,6 +587,10 @@ export default function AdminPage() {
       const refreshed = await adminAPI.getTerms();
       setTerms(refreshed.data.terms || []);
       setSelectedTermId('');
+      if (timetableTermFilter === String(t.id)) setTimetableTermFilter('');
+      // Deleting a term removes its classes too.
+      setCancelEntryId('');
+      await refreshTimetable();
       await refreshActionLogs();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to delete term');
@@ -522,9 +622,9 @@ export default function AdminPage() {
       setImportReport(res.data);
       toast.success(res.data.message || 'Timetable imported');
 
-      const timetableRes = await adminAPI.getTimetable();
-      setTimetable(timetableRes.data.entries || []);
+      await refreshTimetable();
       setImportFile(null);
+      setImportFileInputKey((key) => key + 1); // an uncontrolled file input only clears on remount
       await refreshActionLogs();
     } catch (err) {
       const report = err.response?.data;
@@ -715,6 +815,27 @@ export default function AdminPage() {
         Back to admin home
       </button>
 
+      {loadingData && (
+        <p role="status" className="section-subtitle" style={{ marginBottom: 16 }}>
+          Loading admin data…
+        </p>
+      )}
+
+      {!loadingData && failedSections.length > 0 && (
+        <div
+          role="alert"
+          className="card"
+          style={{ padding: 12, marginBottom: 16, borderColor: 'var(--accent-danger)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}
+        >
+          <span style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+            Could not load: {failedSections.join(', ')}. These sections may look empty.
+          </span>
+          <button type="button" className="btn btn-ghost" onClick={loadInitialData}>
+            Try again
+          </button>
+        </div>
+      )}
+
       {/* Admin Header */}
       <div style={{ marginBottom: 24 }}>
         <h1 className="section-title" style={{ fontSize: '1.75rem' }}>
@@ -901,10 +1022,10 @@ export default function AdminPage() {
                         </td>
                         <td>{ev.title}</td>
                         <td style={{ fontSize: '0.75rem' }}>
-                          {new Date(ev.start_at).toLocaleDateString()}
+                          {new Date(ev.start_at).toLocaleDateString('en-GB', { timeZone: CAMPUS_TIME_ZONE })}
                           <br />
-                          {new Date(ev.start_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} -{' '}
-                          {new Date(ev.end_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(ev.start_at).toLocaleTimeString('en-GB', { timeZone: CAMPUS_TIME_ZONE, hour: '2-digit', minute: '2-digit' })} -{' '}
+                          {new Date(ev.end_at).toLocaleTimeString('en-GB', { timeZone: CAMPUS_TIME_ZONE, hour: '2-digit', minute: '2-digit' })}
                         </td>
                         <td>
                           <button
@@ -928,64 +1049,128 @@ export default function AdminPage() {
 
       {/* ── Tab 2: Cancel Class Occurrence ───────────────── */}
       {activeTab === 'cancel' && (
-        <div className="admin-card fade-in" style={{ maxWidth: 640 }}>
-          <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <HiOutlineBan size={20} style={{ color: 'var(--accent-danger)' }} />
-            Cancel Single Class Occurrence
-          </h2>
-          <p className="section-subtitle" style={{ marginBottom: 20 }}>
-            Frees up a room for a specific date (e.g. cancelled lecture) without modifying the recurring master timetable.
-          </p>
+        <div className="admin-grid fade-in">
+          <div className="admin-card">
+            <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <HiOutlineBan size={20} style={{ color: 'var(--accent-danger)' }} />
+              Cancel Single Class Occurrence
+            </h2>
+            <p className="section-subtitle" style={{ marginBottom: 20 }}>
+              Frees up a room for a specific date (e.g. cancelled lecture) without modifying the recurring master timetable.
+            </p>
 
-          <form onSubmit={handleCancelClass}>
-            <div className="input-group">
-              <label className="input-label">Select Recurring Class</label>
-              <select
-                className="input-field"
-                value={cancelEntryId}
-                onChange={(e) => setCancelEntryId(e.target.value)}
-                required
-              >
-                <option value="">-- Choose a recurring class --</option>
-                {timetable.map((te) => (
-                  <option key={te.id} value={te.id}>
-                    {DAY_NAMES[te.day_of_week]} {te.start_time}-{te.end_time}: {te.course_name} (Room {te.room_name})
+            <form onSubmit={handleCancelClass}>
+              <div className="input-group">
+                <label className="input-label">Date of Cancellation</label>
+                <input
+                  type="date"
+                  className="input-field"
+                  value={cancelDate}
+                  onChange={(e) => {
+                    setCancelDate(e.target.value);
+                    setCancelEntryId('');
+                  }}
+                  required
+                />
+              </div>
+
+              <div className="input-group">
+                <label className="input-label">Class on this date</label>
+                <select
+                  className="input-field"
+                  value={cancelEntryId}
+                  onChange={(e) => setCancelEntryId(e.target.value)}
+                  required
+                >
+                  <option value="">
+                    {classesOnCancelDate.length > 0 ? '-- Choose a class --' : 'No classes run on this date'}
                   </option>
-                ))}
-              </select>
-            </div>
+                  {classesOnCancelDate.map((te) => (
+                    <option key={te.id} value={te.id}>
+                      {formatTime(te.start_time)}-{formatTime(te.end_time)}: {te.course_name} (Room {te.room_name}{te.batch_year ? `, Batch ${te.batch_year}` : ''})
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div className="input-group">
-              <label className="input-label">Date of Cancellation</label>
-              <input
-                type="date"
-                className="input-field"
-                value={cancelDate}
-                onChange={(e) => setCancelDate(e.target.value)}
-                required
-              />
-            </div>
+              <div className="input-group">
+                <label className="input-label">Reason / Notes (Optional)</label>
+                <input
+                  type="text"
+                  className="input-field"
+                  placeholder="e.g. Instructor on leave / Holiday"
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                />
+              </div>
 
-            <div className="input-group">
-              <label className="input-label">Reason / Notes (Optional)</label>
-              <input
-                type="text"
-                className="input-field"
-                placeholder="e.g. Instructor on leave / Holiday"
-                value={cancelReason}
-                onChange={(e) => setCancelReason(e.target.value)}
-              />
-            </div>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={cancellingClass}
+                style={{ marginTop: 8 }}
+              >
+                {cancellingClass ? 'Recording...' : 'Cancel Occurrence & Free Room'}
+              </button>
+            </form>
+          </div>
 
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={cancellingClass}
-              style={{ marginTop: 8 }}
-            >
-              {cancellingClass ? 'Recording...' : 'Cancel Occurrence & Free Room'}
-            </button>
-          </form>
+          {/* Upcoming Cancellations List */}
+          <div className="admin-card">
+            <h2 className="section-title" style={{ fontSize: '1.15rem' }}>
+              Upcoming Cancellations ({cancellations.length})
+            </h2>
+            <p className="section-subtitle" style={{ marginBottom: 16 }}>
+              Restoring a class puts it back on the timetable and makes its room busy again.
+            </p>
+
+            {cancellations.length === 0 ? (
+              <div className="empty-state" style={{ padding: '32px 0' }}>
+                <div className="empty-state-title" style={{ fontSize: '0.95rem' }}>No upcoming cancellations</div>
+                <div className="empty-state-text">Cancelled classes will appear here.</div>
+              </div>
+            ) : (
+              <div style={{ maxHeight: '420px', overflow: 'auto' }}>
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Class</th>
+                      <th>Room</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cancellations.map((c) => (
+                      <tr key={c.id}>
+                        <td style={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                          {c.date}
+                          <br />
+                          {formatTime(c.start_time)}-{formatTime(c.end_time)}
+                        </td>
+                        <td>
+                          <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{c.course_name}</div>
+                          <div style={{ fontSize: '0.75rem' }}>
+                            {[c.batch_year && `Batch ${c.batch_year}`, c.reason].filter(Boolean).join(' · ')}
+                          </div>
+                        </td>
+                        <td style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{c.room_name}</td>
+                        <td>
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            disabled={restoringId !== null}
+                            onClick={() => handleRestoreClass(c)}
+                          >
+                            {restoringId === c.id ? 'Restoring...' : 'Restore'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1055,7 +1240,7 @@ export default function AdminPage() {
                       {DAY_NAMES[te.day_of_week]}
                     </td>
                     <td>
-                      {te.start_time} - {te.end_time}
+                      {formatTime(te.start_time)} - {formatTime(te.end_time)}
                     </td>
                     <td>
                       {te.batch_year ? (
@@ -1099,6 +1284,7 @@ export default function AdminPage() {
                 <div className="input-group">
                   <label className="input-label">Timetable File (.xlsx)</label>
                   <input
+                    key={importFileInputKey}
                     type="file"
                     accept=".xlsx,.xls"
                     className="input-field"
@@ -1114,7 +1300,7 @@ export default function AdminPage() {
                       type="button"
                       className="btn btn-ghost"
                       style={{ padding: '2px 8px', fontSize: '0.8rem' }}
-                      onClick={() => setShowCreateTerm(!showCreateTerm)}
+                      onClick={() => (showCreateTerm ? setShowCreateTerm(false) : openTermForm())}
                     >
                       {showCreateTerm ? 'Cancel' : '+ Add New Term'}
                     </button>
@@ -1126,17 +1312,18 @@ export default function AdminPage() {
                     required
                   >
                     <option value="">Choose batch and term</option>
-                    {terms
-                      .filter((t) => {
-                        const todayStr = getCampusDateStr();
-                        const endStr = String(t.end_date).slice(0, 10);
-                        return endStr >= todayStr;
-                      })
-                      .map((t) => (
-                        <option key={t.id} value={t.id}>
-                          Batch {t.batch_year} — Term {t.term_number} (Sem {t.semester_number}) [{String(t.start_date).slice(0, 10)} to {String(t.end_date).slice(0, 10)}]
-                        </option>
-                      ))}
+                    {[
+                      ['Current and upcoming terms', terms.filter((t) => String(t.end_date).slice(0, 10) >= getCampusDateStr())],
+                      ['Past terms', terms.filter((t) => String(t.end_date).slice(0, 10) < getCampusDateStr())],
+                    ].map(([label, group]) => group.length > 0 && (
+                      <optgroup key={label} label={label}>
+                        {group.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            Batch {t.batch_year} — Term {t.term_number} (Sem {t.semester_number}) [{String(t.start_date).slice(0, 10)} to {String(t.end_date).slice(0, 10)}]
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
                   </select>
                 </div>
 
@@ -1162,14 +1349,24 @@ export default function AdminPage() {
                                 Term Duration: <strong>{String(t.start_date).slice(0, 10)}</strong> to <strong>{String(t.end_date).slice(0, 10)}</strong>
                               </div>
                             </div>
-                            <button
-                              type="button"
-                              className="btn btn-ghost"
-                              style={{ color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.4)', fontSize: '0.8rem', padding: '4px 10px' }}
-                              onClick={() => handleDeleteTerm(t)}
-                            >
-                              Delete Term
-                            </button>
+                            <div style={{ display: 'flex', gap: 8, flexShrink: 0, marginLeft: 12 }}>
+                              <button
+                                type="button"
+                                className="btn btn-ghost"
+                                style={{ fontSize: '0.8rem', padding: '4px 10px' }}
+                                onClick={() => openTermForm(t)}
+                              >
+                                Edit Term
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost"
+                                style={{ color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.4)', fontSize: '0.8rem', padding: '4px 10px' }}
+                                onClick={() => handleDeleteTerm(t)}
+                              >
+                                Delete Term
+                              </button>
+                            </div>
                           </div>
                         </>
                       );
@@ -1178,15 +1375,21 @@ export default function AdminPage() {
                 )}
 
                 {showCreateTerm && (
-                  <div style={{
-                    padding: '14px',
-                    background: 'var(--bg-subtle)',
-                    border: '1px solid var(--border-control)',
-                    borderRadius: 'var(--radius-md)',
-                    marginBottom: 16,
-                  }}>
+                  <div
+                    style={{
+                      padding: '14px',
+                      background: 'var(--bg-subtle)',
+                      border: '1px solid var(--border-control)',
+                      borderRadius: 'var(--radius-md)',
+                      marginBottom: 16,
+                    }}
+                    onKeyDown={(e) => {
+                      // This sits inside the import form: Enter must save the term, not start an import.
+                      if (e.key === 'Enter') handleSaveTerm(e);
+                    }}
+                  >
                     <h3 style={{ fontSize: '0.95rem', marginBottom: 10, color: 'var(--text-primary)' }}>
-                      Add New Term
+                      {editingTermId ? 'Edit Term' : 'Add New Term'}
                     </h3>
                     <div className="form-row">
                       <div className="input-group">
@@ -1196,6 +1399,7 @@ export default function AdminPage() {
                           className="input-field"
                           placeholder="e.g. 2029"
                           value={newBatchYear}
+                          disabled={!!editingTermId}
                           onChange={(e) => setNewBatchYear(e.target.value)}
                         />
                       </div>
@@ -1245,7 +1449,7 @@ export default function AdminPage() {
                       className="btn btn-primary"
                       style={{ fontSize: '0.85rem', padding: '6px 14px' }}
                       disabled={creatingTerm}
-                      onClick={handleCreateTerm}
+                      onClick={handleSaveTerm}
                     >
                       {creatingTerm ? 'Saving...' : 'Save term'}
                     </button>
@@ -1380,6 +1584,10 @@ export default function AdminPage() {
                   <div className="stat-value">{importReport.errors?.length ?? 0}</div>
                   <div className="stat-label">Errors</div>
                 </div>
+                <div className="stat-card">
+                  <div className="stat-value">{importReport.warnings?.length ?? 0}</div>
+                  <div className="stat-label">Warnings</div>
+                </div>
               </div>
 
               <p className="section-subtitle" style={{ marginBottom: 12 }}>
@@ -1394,6 +1602,30 @@ export default function AdminPage() {
                     {importReport.unmappedRooms.map((room) => (
                       <span key={room} className="room-card-badge badge-split">{room}</span>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {importReport.warnings?.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div className="input-label">Warnings (these rows were still processed)</div>
+                  <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>Row</th>
+                          <th>Reason</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {importReport.warnings.map((warning, i) => (
+                          <tr key={i}>
+                            <td>{warning.sheetRow}</td>
+                            <td>{warning.reason}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               )}
@@ -1635,7 +1867,7 @@ export default function AdminPage() {
           <div className="admin-card">
             <h2 className="section-title" style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: 8 }}>
               <HiOutlineViewList size={20} style={{ color: 'var(--accent-primary)' }} />
-              Active & Upcoming Closures ({closures.length})
+              Closures ({closures.length})
             </h2>
             <p className="section-subtitle" style={{ marginBottom: 16 }}>
               Exams and closures take priority over recurring timetables.

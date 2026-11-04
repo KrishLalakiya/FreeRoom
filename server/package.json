@@ -9,6 +9,7 @@
     "start": "node src/index.js",
     "seed": "node src/config/seed.js",
     "migrate": "node src/config/migrate.js",
+    "hash-password": "node scripts/hashAdminPassword.js",
     "test": "vitest"
   },
   "dependencies": {

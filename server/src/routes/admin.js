@@ -3,40 +3,52 @@ import multer from 'multer';
 import { query, getClient } from '../config/db.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { importTimetable } from '../services/timetableImport.js';
-import { isValidDateStr, toDateStr } from '../utils/timezone.js';
+import { dayOfWeekForDateStr, isValidDateStr, toDateStr } from '../utils/timezone.js';
 import { clearAvailabilityCache } from '../services/cache.js';
 import { getSystemSettings, updateSystemSettings } from '../services/systemSettings.js';
 
 const router = Router();
 
+const MAX_UPLOAD_MB = 10;
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
 });
 
-// Ensure admin_actions table exists
-async function ensureAdminActionsTable() {
-  try {
-    await query(`
-      CREATE TABLE IF NOT EXISTS admin_actions (
-        id          SERIAL PRIMARY KEY,
-        admin_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        admin_name  VARCHAR(255) NOT NULL,
-        action_type VARCHAR(100) NOT NULL,
-        description TEXT NOT NULL,
-        details     JSONB,
-        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-    await query(`
-      CREATE INDEX IF NOT EXISTS idx_admin_actions_created_at
-      ON admin_actions (created_at DESC);
-    `);
-  } catch (err) {
-    console.error('Failed to ensure admin_actions table:', err);
-  }
+const MAX_PG_INT = 2147483647;
+const MAX_SMALLINT = 32767;
+const MAX_TEXT_LENGTH = 255;
+const TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** Parse a positive integer that fits a Postgres column, or return null. */
+function parsePositiveInt(value, max = MAX_PG_INT) {
+  const text = String(value ?? '').trim();
+  if (!/^\d+$/.test(text)) return null;
+  const parsed = Number(text);
+  return parsed >= 1 && parsed <= max ? parsed : null;
 }
-ensureAdminActionsTable();
+
+function invalidId(res, label = 'id') {
+  return res.status(400).json({
+    error: 'Invalid id',
+    message: `${label} must be a positive integer.`,
+  });
+}
+
+/** Trimmed text that fits a VARCHAR(255) column, or null when it is not a string or is too long. */
+function cleanText(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed.length <= MAX_TEXT_LENGTH ? trimmed : null;
+}
+
+function invalidText(res, label) {
+  return res.status(400).json({
+    error: `Invalid ${label}`,
+    message: `${label} must be text of at most ${MAX_TEXT_LENGTH} characters.`,
+  });
+}
 
 export async function logAdminAction(req, actionType, description, details = null) {
   try {
@@ -85,17 +97,29 @@ router.get('/action-logs', async (req, res) => {
  */
 router.post('/events', async (req, res) => {
   try {
-    const { roomId, title, startAt, endAt } = req.body;
+    const { startAt, endAt } = req.body;
+    const roomId = parsePositiveInt(req.body.roomId);
+    const title = cleanText(req.body.title);
 
-    if (!roomId || !title || !startAt || !endAt) {
+    if (!req.body.roomId || !req.body.title || !startAt || !endAt) {
       return res.status(400).json({
         error: 'Missing fields',
         message: 'roomId, title, startAt, and endAt are required.',
       });
     }
 
+    if (!roomId) return invalidId(res, 'roomId');
+    if (!title) return invalidText(res, 'title');
+
     const start = new Date(startAt);
     const end = new Date(endAt);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      return res.status(400).json({
+        error: 'Invalid dates',
+        message: 'startAt and endAt must be valid date-times.',
+      });
+    }
 
     if (start >= end) {
       return res.status(400).json({
@@ -107,16 +131,33 @@ router.post('/events', async (req, res) => {
     const client = await getClient();
     try {
       await client.query('BEGIN');
-      // Lock room to prevent double-booking race condition (PRD v9 item 17)
-      await client.query('SELECT id FROM rooms WHERE id = $1 FOR UPDATE', [roomId]);
+      // Lock the room and the rooms that share its space (2B with 2B1/2B2) to prevent a
+      // double-booking race (PRD v9 item 17).
+      const relatedRes = await client.query(`
+        SELECT id FROM rooms
+        WHERE id = $1
+           OR parent_room_id = $1
+           OR id = (SELECT parent_room_id FROM rooms WHERE id = $1)
+        ORDER BY id
+        FOR UPDATE
+      `, [roomId]);
+      const relatedRoomIds = relatedRes.rows.map((row) => row.id);
+
+      if (!relatedRoomIds.includes(roomId)) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({
+          error: 'Room not found',
+          message: `Room with id ${roomId} does not exist.`,
+        });
+      }
 
       // Check for clashes
       const clashRes = await client.query(`
         SELECT id, title FROM events
-        WHERE room_id = $1
+        WHERE room_id = ANY($1::int[])
           AND start_at < $3
           AND end_at > $2
-      `, [roomId, start, end]);
+      `, [relatedRoomIds, start, end]);
 
       if (clashRes.rows.length > 0) {
         await client.query('ROLLBACK');
@@ -157,7 +198,8 @@ router.post('/events', async (req, res) => {
  */
 router.delete('/events/:id', async (req, res) => {
   try {
-    const eventId = parseInt(req.params.id, 10);
+    const eventId = parsePositiveInt(req.params.id);
+    if (!eventId) return invalidId(res);
 
     const result = await query('DELETE FROM events WHERE id = $1 RETURNING *', [eventId]);
 
@@ -181,23 +223,57 @@ router.delete('/events/:id', async (req, res) => {
  */
 router.post('/cancel-class', async (req, res) => {
   try {
-    const { timetableEntryId, date, reason } = req.body;
+    const { date } = req.body;
+    const timetableEntryId = parsePositiveInt(req.body.timetableEntryId);
+    const reason = req.body.reason === undefined ? '' : cleanText(req.body.reason);
 
-    if (!timetableEntryId || !date) {
+    if (!req.body.timetableEntryId || !date) {
       return res.status(400).json({
         error: 'Missing fields',
         message: 'timetableEntryId and date are required.',
       });
     }
 
+    if (!timetableEntryId) return invalidId(res, 'timetableEntryId');
+    if (reason === null) return invalidText(res, 'reason');
+
+    if (!isValidDateStr(date)) {
+      return res.status(400).json({
+        error: 'Invalid date',
+        message: 'date must be a real calendar date in YYYY-MM-DD format.',
+      });
+    }
+
     // Verify the timetable entry exists
-    const entryRes = await query(
-      'SELECT * FROM timetable_entries WHERE id = $1',
-      [timetableEntryId]
-    );
+    const entryRes = await query(`
+      SELECT te.day_of_week, te.valid_from, te.valid_to,
+             t.start_date AS term_start, t.end_date AS term_end
+      FROM timetable_entries te
+      LEFT JOIN terms t ON t.id = te.term_id
+      WHERE te.id = $1
+    `, [timetableEntryId]);
 
     if (entryRes.rows.length === 0) {
       return res.status(404).json({ error: 'Timetable entry not found' });
+    }
+
+    // A cancellation only takes effect on a day the class actually runs. Reject the rest,
+    // otherwise the admin is told the room was freed when nothing changed.
+    const entry = entryRes.rows[0];
+    if (dayOfWeekForDateStr(date) !== entry.day_of_week) {
+      return res.status(400).json({
+        error: 'Class does not run on this date',
+        message: `This class runs on ${DAY_NAMES[entry.day_of_week]}, but ${date} is a ${DAY_NAMES[dayOfWeekForDateStr(date)]}.`,
+      });
+    }
+
+    const runsFrom = entry.term_start || entry.valid_from;
+    const runsTo = entry.term_end || entry.valid_to;
+    if ((runsFrom && date < toDateStr(runsFrom)) || (runsTo && date > toDateStr(runsTo))) {
+      return res.status(400).json({
+        error: 'Class does not run on this date',
+        message: `This class only runs from ${toDateStr(runsFrom)} to ${toDateStr(runsTo)}.`,
+      });
     }
 
     const result = await query(`
@@ -224,6 +300,63 @@ router.post('/cancel-class', async (req, res) => {
   } catch (err) {
     console.error('Cancel class error:', err);
     res.status(500).json({ error: 'Failed to cancel class' });
+  }
+});
+
+/**
+ * GET /api/admin/cancellations
+ * List cancelled class occurrences from today (campus date) onwards.
+ */
+router.get('/cancellations', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT se.id, se.timetable_entry_id, se.date, se.reason, se.created_at,
+             COALESCE(te.course_name, s.name) AS course_name,
+             te.start_time, te.end_time, te.group_name,
+             te.room_id, r.name AS room_name, r.floor,
+             b.year AS batch_year
+      FROM schedule_exceptions se
+      JOIN timetable_entries te ON te.id = se.timetable_entry_id
+      JOIN rooms r ON r.id = te.room_id
+      LEFT JOIN subjects s ON s.id = te.subject_id
+      LEFT JOIN terms t ON t.id = te.term_id
+      LEFT JOIN batches b ON b.id = t.batch_id
+      WHERE se.date >= $1
+      ORDER BY se.date, te.start_time, se.id
+    `, [toDateStr()]);
+    res.json({ cancellations: result.rows });
+  } catch (err) {
+    console.error('Fetch cancellations error:', err);
+    res.status(500).json({ error: 'Failed to fetch cancellations' });
+  }
+});
+
+/**
+ * DELETE /api/admin/cancellations/:id
+ * Undo a cancellation, so the class runs and its room is busy again.
+ */
+router.delete('/cancellations/:id', async (req, res) => {
+  try {
+    const cancellationId = parsePositiveInt(req.params.id);
+    if (!cancellationId) return invalidId(res);
+
+    const result = await query('DELETE FROM schedule_exceptions WHERE id = $1 RETURNING *', [cancellationId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Cancellation not found',
+        message: 'This cancellation no longer exists. It may already have been restored.',
+      });
+    }
+
+    const { timetable_entry_id: timetableEntryId, date } = result.rows[0];
+    clearAvailabilityCache();
+    await logAdminAction(req, 'restore_class', `Restored cancelled class occurrence for ${date}`, { cancellationId, timetableEntryId, date });
+
+    res.json({ message: 'Class restored', cancellation: result.rows[0] });
+  } catch (err) {
+    console.error('Restore class error:', err);
+    res.status(500).json({ error: 'Failed to restore class' });
   }
 });
 
@@ -276,9 +409,16 @@ router.post('/terms', async (req, res) => {
       });
     }
 
-    const bYear = parseInt(batchYear, 10);
-    const semNum = parseInt(semesterNumber, 10);
-    const tNum = parseInt(termNumber, 10);
+    const bYear = parsePositiveInt(batchYear);
+    const semNum = parsePositiveInt(semesterNumber, MAX_SMALLINT);
+    const tNum = parsePositiveInt(termNumber, MAX_SMALLINT);
+
+    if (!bYear || !semNum || !tNum) {
+      return res.status(400).json({
+        error: 'Invalid term',
+        message: 'batchYear, semesterNumber, and termNumber must be positive whole numbers.',
+      });
+    }
 
     const client = await getClient();
     try {
@@ -359,7 +499,8 @@ router.post('/terms', async (req, res) => {
  */
 router.put('/terms/:id', async (req, res) => {
   try {
-    const termId = parseInt(req.params.id, 10);
+    const termId = parsePositiveInt(req.params.id);
+    if (!termId) return invalidId(res);
     const { semesterNumber, termNumber, startDate, endDate } = req.body;
 
     const existingRes = await query('SELECT * FROM terms WHERE id = $1', [termId]);
@@ -371,8 +512,15 @@ router.put('/terms/:id', async (req, res) => {
     // PRD v9 item 20: use toDateStr to prevent Date objects from failing isValidDateStr
     const sDate = startDate || toDateStr(current.start_date);
     const eDate = endDate || toDateStr(current.end_date);
-    const semNum = semesterNumber !== undefined ? parseInt(semesterNumber, 10) : current.semester_number;
-    const tNum = termNumber !== undefined ? parseInt(termNumber, 10) : current.term_number;
+    const semNum = semesterNumber !== undefined ? parsePositiveInt(semesterNumber, MAX_SMALLINT) : current.semester_number;
+    const tNum = termNumber !== undefined ? parsePositiveInt(termNumber, MAX_SMALLINT) : current.term_number;
+
+    if (!semNum || !tNum) {
+      return res.status(400).json({
+        error: 'Invalid term',
+        message: 'semesterNumber and termNumber must be positive whole numbers.',
+      });
+    }
 
     if (!isValidDateStr(sDate) || !isValidDateStr(eDate)) {
       return res.status(400).json({
@@ -433,6 +581,12 @@ router.put('/terms/:id', async (req, res) => {
         RETURNING *
       `, [semNum, tNum, sDate, eDate, termId]);
 
+      // The import clash check reads these copies of the term dates, so keep them in step.
+      await client.query(
+        'UPDATE timetable_entries SET valid_from = $1, valid_to = $2 WHERE term_id = $3',
+        [sDate, eDate, termId]
+      );
+
       await client.query('COMMIT');
 
       clearAvailabilityCache();
@@ -457,7 +611,8 @@ router.put('/terms/:id', async (req, res) => {
  */
 router.delete('/terms/:id', async (req, res) => {
   try {
-    const termId = parseInt(req.params.id, 10);
+    const termId = parsePositiveInt(req.params.id);
+    if (!termId) return invalidId(res);
     const result = await query('DELETE FROM terms WHERE id = $1 RETURNING *', [termId]);
 
     if (result.rows.length === 0) {
@@ -498,7 +653,8 @@ router.get('/timetable', async (req, res) => {
 
     let sql = `
       SELECT te.*, r.name as room_name, r.floor,
-             t.term_number, b.year as batch_year
+             t.term_number, t.start_date AS term_start, t.end_date AS term_end,
+             b.year as batch_year
       FROM timetable_entries te
       JOIN rooms r ON te.room_id = r.id
       LEFT JOIN terms t ON te.term_id = t.id
@@ -520,11 +676,11 @@ router.get('/timetable', async (req, res) => {
       sql += ' WHERE ' + conditions.join(' AND ');
     }
 
-    sql += ' ORDER BY te.day_of_week, te.start_time';
+    sql += ' ORDER BY te.day_of_week, te.start_time, te.id';
 
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 500, 1), 1000);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-    sql += ` LIMIT ${params.length + 1} OFFSET ${params.length + 2}`;
+    sql += ` LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
     params.push(limit, offset);
 
     const result = await query(sql, params);
@@ -559,6 +715,20 @@ router.get('/events', async (req, res) => {
   }
 });
 
+/** Run the upload, turning multer's errors (e.g. file too large) into readable responses. */
+function handleUpload(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({
+        error: 'File too large',
+        message: `The timetable file must be ${MAX_UPLOAD_MB} MB or smaller.`,
+      });
+    }
+    return res.status(400).json({ error: 'Upload failed', message: err.message });
+  });
+}
+
 /**
  * POST /api/admin/timetable/import
  * Upload the weekly .xlsx timetable, validate it, and save valid rows.
@@ -571,7 +741,7 @@ router.get('/events', async (req, res) => {
  *   buildingId          (optional, default 1)
  *   saveValidRowsOnly   (optional) "true" to save good rows even if some fail
  */
-router.post('/timetable/import', upload.single('file'), async (req, res) => {
+router.post('/timetable/import', handleUpload, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -676,7 +846,7 @@ router.post('/timetable/import', upload.single('file'), async (req, res) => {
 
     return res.status(report.committed ? 200 : 400).json(report);
   } catch (err) {
-    if (err.code === 'NO_TIMETABLE_SHEET' || err.code === 'NO_ROOMS') {
+    if (['NO_TIMETABLE_SHEET', 'NO_ROOMS', 'TERM_NOT_FOUND', 'UNREADABLE_WORKBOOK'].includes(err.code)) {
       return res.status(400).json({ error: 'Import failed', message: err.message });
     }
     console.error('Timetable import error:', err);
@@ -717,9 +887,10 @@ router.post('/room-aliases', async (req, res) => {
         message: 'alias is required.',
       });
     }
+    if (cleanText(alias) === null) return invalidText(res, 'alias');
 
-    const parsedRoomId = parseInt(roomId, 10);
-    if (!Number.isInteger(parsedRoomId) || parsedRoomId < 1) {
+    const parsedRoomId = parsePositiveInt(roomId);
+    if (!parsedRoomId) {
       return res.status(400).json({
         error: 'Invalid room',
         message: 'roomId must be a positive integer.',
@@ -752,7 +923,8 @@ router.post('/room-aliases', async (req, res) => {
  */
 router.delete('/room-aliases/:id', async (req, res) => {
   try {
-    const aliasId = parseInt(req.params.id, 10);
+    const aliasId = parsePositiveInt(req.params.id);
+    if (!aliasId) return invalidId(res);
     const result = await query('DELETE FROM room_aliases WHERE id = $1 RETURNING *', [aliasId]);
 
     if (result.rows.length === 0) {
@@ -811,9 +983,11 @@ router.post('/closures', async (req, res) => {
       endDate,
       startTime,
       endTime,
-      reason = 'Exam',
-      note,
     } = req.body;
+    const reason = req.body.reason === undefined ? 'Exam' : cleanText(req.body.reason);
+    const note = req.body.note === undefined || req.body.note === null ? null : String(req.body.note).trim();
+
+    if (reason === null) return invalidText(res, 'reason');
 
     // Validate scope
     if (!['room', 'floor', 'building'].includes(scope)) {
@@ -847,8 +1021,16 @@ router.post('/closures', async (req, res) => {
     }
 
     // Validate optional time range
-    let finalStartTime = startTime ? startTime.trim().slice(0, 5) : null;
-    let finalEndTime = endTime ? endTime.trim().slice(0, 5) : null;
+    if ((startTime && !TIME_PATTERN.test(String(startTime).trim()))
+      || (endTime && !TIME_PATTERN.test(String(endTime).trim()))) {
+      return res.status(400).json({
+        error: 'Invalid time',
+        message: 'startTime and endTime must be in HH:MM format.',
+      });
+    }
+
+    let finalStartTime = startTime ? String(startTime).trim().slice(0, 5) : null;
+    let finalEndTime = endTime ? String(endTime).trim().slice(0, 5) : null;
 
     if (finalStartTime || finalEndTime) {
       if (!finalStartTime || !finalEndTime) {
@@ -871,8 +1053,8 @@ router.post('/closures', async (req, res) => {
 
     // Scope-specific validation
     if (scope === 'room') {
-      parsedRoomId = parseInt(roomId, 10);
-      if (!Number.isInteger(parsedRoomId) || parsedRoomId < 1) {
+      parsedRoomId = parsePositiveInt(roomId);
+      if (!parsedRoomId) {
         return res.status(400).json({
           error: 'Missing room',
           message: 'roomId is required when scope is room.',
@@ -888,7 +1070,7 @@ router.post('/closures', async (req, res) => {
       resolvedBuildingId = roomCheck.rows[0].building_id;
       finalFloor = roomCheck.rows[0].floor;
     } else if (scope === 'floor') {
-      if (!floor || !floor.trim()) {
+      if (typeof floor !== 'string' || !floor.trim()) {
         return res.status(400).json({
           error: 'Missing floor',
           message: 'floor is required when scope is floor.',
@@ -924,7 +1106,7 @@ router.post('/closures', async (req, res) => {
          WHERE scope = $1
            AND (
              ($1 = 'building' AND (building_id IS NULL OR building_id = $2))
-             OR ($1 = 'floor' AND LOWER(TRIM(floor)) = LOWER(TRIM($3)))
+             OR ($1 = 'floor' AND building_id = $2 AND LOWER(TRIM(floor)) = LOWER(TRIM($3)))
              OR ($1 = 'room' AND room_id = $4)
            )
            AND start_date <= $6
@@ -943,26 +1125,32 @@ router.post('/closures', async (req, res) => {
       });
 
       if (overlapping.length > 0) {
+        // A new closure can span several existing ones. Fold them all into the first, so
+        // nothing overlapping is left stored twice (C11).
         const target = overlapping[0];
-        // PRD v9 item 19: target.start_date is a Date object, convert with toDateStr so string comparison works
-        const targetStartStr = toDateStr(target.start_date);
-        const targetEndStr = toDateStr(target.end_date);
-        const mergedStart = targetStartStr < startDate ? targetStartStr : startDate;
-        const mergedEnd = targetEndStr > finalEndDate ? targetEndStr : finalEndDate;
-        let mergedStartTime = target.start_time;
-        let mergedEndTime = target.end_time;
+        let mergedStart = startDate;
+        let mergedEnd = finalEndDate;
+        let mergedStartTime = finalStartTime;
+        let mergedEndTime = finalEndTime;
 
-        if (!target.start_time || !finalStartTime) {
-          mergedStartTime = null;
-          mergedEndTime = null;
-        } else {
-          const tStart = String(target.start_time).slice(0, 5);
-          const tEnd = String(target.end_time).slice(0, 5);
-          mergedStartTime = tStart < finalStartTime ? tStart : finalStartTime;
-          mergedEndTime = tEnd > finalEndTime ? tEnd : finalEndTime;
+        for (const existing of overlapping) {
+          const existingStart = toDateStr(existing.start_date);
+          const existingEnd = toDateStr(existing.end_date);
+          if (existingStart < mergedStart) mergedStart = existingStart;
+          if (existingEnd > mergedEnd) mergedEnd = existingEnd;
+
+          if (!existing.start_time || !mergedStartTime) {
+            mergedStartTime = null;
+            mergedEndTime = null;
+          } else {
+            const tStart = String(existing.start_time).slice(0, 5);
+            const tEnd = String(existing.end_time).slice(0, 5);
+            if (tStart < mergedStartTime) mergedStartTime = tStart;
+            if (tEnd > mergedEndTime) mergedEndTime = tEnd;
+          }
         }
 
-        const mergedNote = [target.note, note].filter(Boolean).join('; ');
+        const mergedNote = [...overlapping.map((existing) => existing.note), note].filter(Boolean).join('; ');
 
         const updateRes = await client.query(
           `UPDATE closures
@@ -970,12 +1158,18 @@ router.post('/closures', async (req, res) => {
                reason = COALESCE($5, reason), note = $6
            WHERE id = $7
            RETURNING *`,
-          [mergedStart, mergedEnd, mergedStartTime, mergedEndTime, reason.trim() || target.reason, mergedNote || null, target.id]
+          [mergedStart, mergedEnd, mergedStartTime, mergedEndTime, reason || target.reason, mergedNote || null, target.id]
         );
+
+        const absorbedIds = overlapping.slice(1).map((existing) => existing.id);
+        if (absorbedIds.length > 0) {
+          await client.query('DELETE FROM closures WHERE id = ANY($1::int[])', [absorbedIds]);
+        }
 
         await client.query('COMMIT');
 
         clearAvailabilityCache();
+        await logAdminAction(req, 'merge_closure', `Merged ${scope} closure: ${reason || target.reason} (${mergedStart} to ${mergedEnd})`, req.body);
 
         return res.status(200).json({
           closure: updateRes.rows[0],
@@ -1000,8 +1194,8 @@ router.post('/closures', async (req, res) => {
           finalEndDate,
           finalStartTime,
           finalEndTime,
-          reason.trim() || 'Exam',
-          note ? note.trim() : null,
+          reason || 'Exam',
+          note || null,
           req.user.id,
         ]
       );
@@ -1009,7 +1203,7 @@ router.post('/closures', async (req, res) => {
       await client.query('COMMIT');
 
       clearAvailabilityCache();
-      await logAdminAction(req, 'create_closure', `Created ${scope} closure: ${reason.trim() || 'Exam'} (${startDate} to ${finalEndDate})`, req.body);
+      await logAdminAction(req, 'create_closure', `Created ${scope} closure: ${reason || 'Exam'} (${startDate} to ${finalEndDate})`, req.body);
 
       res.status(201).json({
         closure: insertRes.rows[0],
@@ -1033,7 +1227,8 @@ router.post('/closures', async (req, res) => {
  */
 router.delete('/closures/:id', async (req, res) => {
   try {
-    const closureId = parseInt(req.params.id, 10);
+    const closureId = parsePositiveInt(req.params.id);
+    if (!closureId) return invalidId(res);
     const result = await query('DELETE FROM closures WHERE id = $1 RETURNING *', [closureId]);
 
     if (result.rows.length === 0) {
@@ -1075,18 +1270,22 @@ router.get('/no-class-days', async (req, res) => {
  */
 router.post('/no-class-days', async (req, res) => {
   try {
-    const { date, reason = 'Holiday', buildingId = 1 } = req.body;
+    const { date } = req.body;
+    const reason = req.body.reason === undefined ? 'Holiday' : cleanText(req.body.reason);
+    const buildingId = parsePositiveInt(req.body.buildingId ?? 1);
     if (!date || !isValidDateStr(date)) {
       return res.status(400).json({ error: 'Invalid date', message: 'date must be in YYYY-MM-DD format.' });
     }
+    if (reason === null) return invalidText(res, 'reason');
+    if (!buildingId) return invalidId(res, 'buildingId');
     const result = await query(`
       INSERT INTO no_class_days (building_id, date, reason, created_by)
       VALUES ($1, $2, $3, $4)
       ON CONFLICT (building_id, date) DO UPDATE SET reason = EXCLUDED.reason
       RETURNING *
-    `, [buildingId, date, reason.trim() || 'Holiday', req.user.id]);
+    `, [buildingId, date, reason || 'Holiday', req.user.id]);
     clearAvailabilityCache({ buildingId });
-    await logAdminAction(req, 'create_no_class_day', `Added holiday/break: ${reason.trim() || 'Holiday'} on ${date}`, { date, reason: reason.trim() });
+    await logAdminAction(req, 'create_no_class_day', `Added holiday/break: ${reason || 'Holiday'} on ${date}`, { date, reason });
     res.status(201).json({ noClassDay: result.rows[0] });
   } catch (err) {
     console.error('Create no-class-day error:', err);
@@ -1099,7 +1298,8 @@ router.post('/no-class-days', async (req, res) => {
  */
 router.delete('/no-class-days/:id', async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveInt(req.params.id);
+    if (!id) return invalidId(res);
     const result = await query('DELETE FROM no_class_days WHERE id = $1 RETURNING *', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'No-class day not found' });
@@ -1136,19 +1336,39 @@ router.put('/settings', async (req, res) => {
     const { chain_min_free_minutes, chain_enabled, buffer_minutes } = req.body;
     const updates = {};
     if (chain_min_free_minutes !== undefined) {
-      const parsed = parseInt(chain_min_free_minutes, 10);
-      if (!isNaN(parsed) && parsed >= 1) updates.chain_min_free_minutes = parsed;
+      const parsed = Number(chain_min_free_minutes);
+      if (!Number.isInteger(parsed) || parsed < 5 || parsed > 120) {
+        return res.status(400).json({
+          error: 'Invalid setting',
+          message: 'Minimum free duration must be a whole number from 5 to 120 minutes.',
+        });
+      }
+      updates.chain_min_free_minutes = parsed;
     }
-    if (typeof chain_enabled === 'boolean') {
+    if (chain_enabled !== undefined) {
+      if (typeof chain_enabled !== 'boolean') {
+        return res.status(400).json({
+          error: 'Invalid setting',
+          message: 'chain_enabled must be true or false.',
+        });
+      }
       updates.chain_enabled = chain_enabled;
     }
     if (buffer_minutes !== undefined) {
-      const parsed = parseInt(buffer_minutes, 10);
-      if (!isNaN(parsed) && parsed >= 0) updates.buffer_minutes = parsed;
+      const parsed = Number(buffer_minutes);
+      if (!Number.isInteger(parsed) || parsed < 0 || parsed > 60) {
+        return res.status(400).json({
+          error: 'Invalid setting',
+          message: 'Buffer must be a whole number from 0 to 60 minutes.',
+        });
+      }
+      updates.buffer_minutes = parsed;
     }
 
     const settings = await updateSystemSettings(updates);
-    await logAdminAction(req, 'update_settings', `Updated room chaining settings: X=${settings.chain_min_free_minutes}m, Chaining=${settings.chain_enabled ? 'On' : 'Off'}`, updates);
+    // Cached availability and My Group results were computed with the old settings.
+    clearAvailabilityCache();
+    await logAdminAction(req, 'update_settings', `Updated room chaining settings: X=${settings.chain_min_free_minutes}m, Buffer=${settings.buffer_minutes}m, Chaining=${settings.chain_enabled ? 'On' : 'Off'}`, updates);
     res.json({ settings });
   } catch (err) {
     console.error('Update settings error:', err);

@@ -3,7 +3,13 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const { Pool } = pg;
+const { Pool, types } = pg;
+
+// DATE columns have no time zone, so keep them as 'YYYY-MM-DD' strings. The driver's default
+// turns them into a local-midnight Date, which serialises to the previous day in IST
+// (2026-10-29 becomes "2026-10-28T18:30:00.000Z") and showed admins the wrong dates.
+const DATE_OID = 1082;
+types.setTypeParser(DATE_OID, (value) => value);
 
 const isRemoteDb = process.env.DATABASE_URL && !process.env.DATABASE_URL.includes('localhost') && !process.env.DATABASE_URL.includes('127.0.0.1');
 

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { getClient } from './db.js';
 import migrate from './migrate.js';
 import { importTimetable } from '../services/timetableImport.js';
@@ -399,7 +399,7 @@ async function getGroupName(client, groupId) {
 }
 
 // Run if called directly
-const isMainModule = process.argv[1]?.includes('seed');
+const isMainModule = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   seed()
     .then(() => process.exit(0))

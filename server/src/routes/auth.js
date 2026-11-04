@@ -93,7 +93,15 @@ router.post('/google', async (req, res) => {
       payload = ticket.getPayload();
     }
 
-    const { sub: googleId, email, name, picture } = payload;
+    const { sub: googleId, email, name, picture, email_verified: emailVerified } = payload;
+
+    // Admin rights are granted by email address, so an unverified address must never count.
+    if (emailVerified === false || emailVerified === 'false') {
+      return res.status(403).json({
+        error: 'Email not verified',
+        message: 'Please verify your Google email address and try again.',
+      });
+    }
 
     // Check email domain restriction
     if (process.env.ALLOWED_EMAIL_DOMAIN) {
@@ -158,56 +166,61 @@ router.post('/dev-login', async (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
 
-  const { email, name, role, deviceSettings } = req.body;
+  const { email, name, deviceSettings } = req.body;
 
-  if (!email) {
+  if (!email || typeof email !== 'string') {
     return res.status(400).json({ error: 'Email is required' });
   }
 
-  const isEmailAdmin = checkIsAdminEmail(email);
-  const assignedRole = role === 'admin' ? (isEmailAdmin ? 'admin' : 'student') : (isEmailAdmin ? 'admin' : (role || 'student'));
+  // The requested role is ignored: only configured admin emails become admins.
+  const assignedRole = checkIsAdminEmail(email) ? 'admin' : 'student';
   const initialSettings = deviceSettings && typeof deviceSettings === 'object' ? deviceSettings : {};
 
-  // PRD v6: Device settings copied once on first sign-in; account settings win if present
-  const result = await query(`
-    INSERT INTO users (email, name, role, settings)
-    VALUES ($1, $2, $3, $4)
-    ON CONFLICT (email) DO UPDATE SET
-      name = COALESCE(EXCLUDED.name, users.name),
-      role = EXCLUDED.role,
-      settings = CASE
-        WHEN users.settings IS NOT NULL AND users.settings != '{}'::jsonb THEN users.settings
-        WHEN EXCLUDED.settings IS NOT NULL AND EXCLUDED.settings != '{}'::jsonb THEN EXCLUDED.settings
-        ELSE COALESCE(users.settings, '{}'::jsonb)
-      END
-    RETURNING id, email, name, role, avatar_url, settings;
-  `, [email, name || email.split('@')[0], assignedRole, JSON.stringify(initialSettings)]);
+  try {
+    // PRD v6: Device settings copied once on first sign-in; account settings win if present
+    const result = await query(`
+      INSERT INTO users (email, name, role, settings)
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (email) DO UPDATE SET
+        name = COALESCE(EXCLUDED.name, users.name),
+        role = EXCLUDED.role,
+        settings = CASE
+          WHEN users.settings IS NOT NULL AND users.settings != '{}'::jsonb THEN users.settings
+          WHEN EXCLUDED.settings IS NOT NULL AND EXCLUDED.settings != '{}'::jsonb THEN EXCLUDED.settings
+          ELSE COALESCE(users.settings, '{}'::jsonb)
+        END
+      RETURNING id, email, name, role, avatar_url, settings;
+    `, [email, name || email.split('@')[0], assignedRole, JSON.stringify(initialSettings)]);
 
-  const user = result.rows[0];
-  const token = generateToken(user);
+    const user = result.rows[0];
+    const token = generateToken(user);
 
-  res.json({
-    token,
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      avatar_url: user.avatar_url,
-      settings: user.settings || {},
-    },
-  });
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        avatar_url: user.avatar_url,
+        settings: user.settings || {},
+      },
+    });
+  } catch (err) {
+    console.error('Dev login error:', err);
+    res.status(500).json({ error: 'Dev login failed' });
+  }
 });
 
 /**
  * POST /api/auth/admin-login
- * Authenticate admin with hardcoded email and password.
+ * Authenticate an admin against the email:bcrypt-hash pairs in ADMIN_USERS.
  */
 router.post('/admin-login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) {
       return res.status(400).json({
         error: 'Missing credentials',
         message: 'Please provide both email and password.',
@@ -218,8 +231,11 @@ router.post('/admin-login', async (req, res) => {
     const envAdminUsers = getAdminUsersFromEnv();
     const expectedPassword = envAdminUsers[normalizedEmail];
 
-    if (!expectedPassword || typeof expectedPassword !== 'string' || !expectedPassword.startsWith('$2')) {
-      console.warn(`Admin password for ${normalizedEmail} must be a bcrypt hash.`);
+    if (!expectedPassword || !expectedPassword.startsWith('$2')) {
+      if (expectedPassword) {
+        // The sign-in page can only say "invalid credentials", so make the real cause findable.
+        console.error(`ADMIN_USERS entry for ${normalizedEmail} is not a bcrypt hash, so this account cannot sign in. Run "npm run hash-password" and put the result in ADMIN_USERS.`);
+      }
       return res.status(401).json({
         error: 'Invalid credentials',
         message: 'Invalid email or password for admin portal.',

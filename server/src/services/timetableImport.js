@@ -413,7 +413,15 @@ export function parseTimetableWorkbook(buffer) {
   const buf = typeof buffer === 'string'
     ? fs.readFileSync(buffer)
     : buffer;
-  const workbook = XLSX.read(buf, { type: 'buffer', cellDates: false });
+  let workbook;
+  try {
+    workbook = XLSX.read(buf, { type: 'buffer', cellDates: false });
+  } catch (readErr) {
+    const err = new Error('This file could not be read as a spreadsheet. Export it again as .xlsx and retry.');
+    err.code = 'UNREADABLE_WORKBOOK';
+    err.cause = readErr;
+    throw err;
+  }
 
   const candidates = [];
   const safeSheetNames = (workbook.SheetNames || []).filter(

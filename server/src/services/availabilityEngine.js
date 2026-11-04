@@ -8,8 +8,7 @@ import {
   formatTimeInTz,
 } from '../utils/timezone.js';
 import { availabilityCache, clearAvailabilityCache } from './cache.js';
-
-const BUFFER_MINUTES = parseInt(process.env.BUFFER_MINUTES || '0', 10);
+import { getSystemSettings } from './systemSettings.js';
 
 /**
  * ─── AVAILABILITY ENGINE ──────────────────────────────────────────────
@@ -647,11 +646,13 @@ async function computeRoomAvailability(room, dateStr, dayOfWeek, building, now =
     }
   }
 
-  if (BUFFER_MINUTES > 0) {
+  // The admin setting falls back to the BUFFER_MINUTES env var inside getSystemSettings.
+  const { buffer_minutes: bufferMinutes } = await getSystemSettings();
+  if (bufferMinutes > 0) {
     busyBlocks = busyBlocks.map((block) => ({
       ...block,
-      start: new Date(block.start.getTime() - BUFFER_MINUTES * 60000),
-      end: new Date(block.end.getTime() + BUFFER_MINUTES * 60000),
+      start: new Date(block.start.getTime() - bufferMinutes * 60000),
+      end: new Date(block.end.getTime() + bufferMinutes * 60000),
     }));
   }
 

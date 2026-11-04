@@ -1,7 +1,54 @@
+import { pathToFileURL } from 'url';
 import { getClient } from './db.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
+
+const VALID_ENTRY_TYPE = "entry_type IN ('class', 'lab', 'club')";
+const ENTRY_TYPE_CHECK = `CHECK (${VALID_ENTRY_TYPE})`;
+// The name Postgres gives the column CHECK in CREATE TABLE, so both paths end up with one constraint.
+const ENTRY_TYPE_CONSTRAINT = 'timetable_entries_entry_type_check';
+
+/**
+ * Databases that gained entry_type through ALTER TABLE have no CHECK on it (C17).
+ *
+ * Migrations run at server start and a failure there aborts production, so rows with other values
+ * must not throw. NOT VALID enforces the rule on new and updated rows straight away while leaving
+ * existing rows alone. Those rows are reported, never rewritten, and the constraint is validated on
+ * the first run that finds none left.
+ */
+async function ensureEntryTypeCheck(client) {
+  const existing = await client.query(
+    `SELECT convalidated FROM pg_constraint
+     WHERE conrelid = 'timetable_entries'::regclass AND conname = '${ENTRY_TYPE_CONSTRAINT}'`
+  );
+  if (existing.rows[0]?.convalidated) return;
+
+  if (existing.rows.length === 0) {
+    await client.query(
+      `ALTER TABLE timetable_entries ADD CONSTRAINT ${ENTRY_TYPE_CONSTRAINT} ${ENTRY_TYPE_CHECK} NOT VALID`
+    );
+  }
+
+  const invalid = await client.query(
+    `SELECT entry_type, COUNT(*)::int AS count
+     FROM timetable_entries
+     WHERE NOT (${VALID_ENTRY_TYPE})
+     GROUP BY entry_type
+     ORDER BY entry_type`
+  );
+  if (invalid.rows.length > 0) {
+    const found = invalid.rows.map((row) => `"${row.entry_type}" (${row.count})`).join(', ');
+    console.warn(
+      `⚠️ timetable_entries has rows with an invalid entry_type: ${found}. Allowed values are class, lab and club. `
+      + 'New rows are checked, but updating one of these rows, including through a term date change, '
+      + 'will fail until it is corrected. The check is validated on the first migration after that.'
+    );
+    return;
+  }
+
+  await client.query(`ALTER TABLE timetable_entries VALIDATE CONSTRAINT ${ENTRY_TYPE_CONSTRAINT}`);
+}
 
 /**
  * Database migration — creates all tables for FreeRoom.
@@ -164,7 +211,7 @@ async function migrate() {
         subject_id      INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
         instructor_id   INTEGER REFERENCES instructors(id) ON DELETE SET NULL,
         entry_type      VARCHAR(20) NOT NULL DEFAULT 'class'
-                          CHECK (entry_type IN ('class', 'lab', 'club')),
+                          ${ENTRY_TYPE_CHECK},
         day_of_week     SMALLINT NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
         start_time      TIME NOT NULL,
         end_time        TIME NOT NULL,
@@ -202,6 +249,7 @@ async function migrate() {
     for (const q of v2AlterQueries) {
       await client.query(q);
     }
+    await ensureEntryTypeCheck(client);
 
     // ── Timetable entry ↔ groups junction (C17) ──────────
     // A class can belong to zero, one or several groups.
@@ -391,7 +439,7 @@ async function migrate() {
 }
 
 // Run if called directly
-const isMainModule = process.argv[1]?.includes('migrate');
+const isMainModule = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMainModule) {
   migrate()
     .then(() => process.exit(0))

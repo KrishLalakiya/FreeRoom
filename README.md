@@ -86,7 +86,7 @@ cd server && npm install
 cd ../client && npm install
 
 # 2. Configure the server
-cp server/.env.example server/.env
+cp .env.example server/.env
 # Edit server/.env (see Environment variables below)
 
 # 3. Create the tables and load the building and terms
@@ -113,7 +113,7 @@ cd client && npm run build
 
 ## Environment variables
 
-Keep real values out of Git. Put them in `server/.env` locally and in the hosting provider's settings in production. The full list is in `server/.env.example`.
+Keep real values out of Git. Put them in `server/.env` locally and in the hosting provider's settings in production. The full list is in `.env.example`.
 
 | Variable | Purpose |
 | --- | --- |
@@ -122,10 +122,10 @@ Keep real values out of Git. Put them in `server/.env` locally and in the hostin
 | `JWT_EXPIRES_IN` | Token lifetime (15 days) |
 | `GOOGLE_CLIENT_ID` | Google sign-in client ID |
 | `ADMIN_EMAILS` | The two admin email addresses |
-| `ADMIN_USERS` | Admin email and bcrypt password hash pairs, if password sign-in is used |
+| `ADMIN_USERS` | Admin `email:bcrypt-hash` pairs, if password sign-in is used. Plain passwords are rejected. Create a hash with `npm run hash-password` in `server/` |
 | `CLIENT_URL` | The web app's URL, allowed by CORS |
 | `CAMPUS_TIMEZONE` | Time zone for all displayed times (`Asia/Kolkata`) |
-| `BUFFER_MINUTES` | Minutes kept free around each class (default 0) |
+| `BUFFER_MINUTES` | Minutes kept free around each class (default 0), until an admin saves a value in Room chaining settings |
 | `NODE_ENV` | `development` locally, `production` when deployed |
 
 ## Timetable and terms

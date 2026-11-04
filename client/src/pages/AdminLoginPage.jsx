@@ -123,7 +123,7 @@ export default function AdminLoginPage() {
             </p>
             <button
               type="button"
-              className="btn btn-outline btn-full"
+              className="btn btn-ghost btn-full"
               onClick={() => {
                 logout();
                 setNotAdminError(false);
